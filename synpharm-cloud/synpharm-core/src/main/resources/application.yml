@@ -1,0 +1,125 @@
+server:
+  # 沿用原 design 的端口：网关只有一条路由指向本服务，端口不变则网关改动最小
+  port: ${SERVER_PORT:8083}
+
+spring:
+  application:
+    # 服务名变化：Nacos 注册名、网关 lb:// 目标都要同步改
+    name: synpharm-core
+
+  cloud:
+    nacos:
+      server-addr: ${NACOS_SERVER_ADDR:localhost:8848}
+      username: ${NACOS_USERNAME:nacos}
+      password: ${NACOS_PASSWORD:nacos}
+      discovery:
+        enabled: ${NACOS_DISCOVERY_ENABLED:true}
+        register-enabled: ${NACOS_REGISTER_ENABLED:true}
+        namespace: ${NACOS_NAMESPACE:}
+        group: ${NACOS_GROUP:DEFAULT_GROUP}
+        fail-fast: false
+      config:
+        import-check:
+          enabled: false
+
+  # 合并后的主业务 schema（原 synpharm_design + synpharm_asset + synpharm_platform）
+  # 三个域共用一个账号，跨域外键现在可以建了（原本跨 schema 禁止）
+  datasource:
+    driver-class-name: com.mysql.cj.jdbc.Driver
+    url: jdbc:mysql://${DB_HOST:localhost}:${DB_PORT:3306}/${CORE_DB_NAME:synpharm_core}?useUnicode=true&characterEncoding=utf8&serverTimezone=Asia/Shanghai
+    username: ${CORE_DB_USER:synpharm_core}
+    password: ${CORE_DB_PASSWORD:}
+    hikari:
+      # 三域共用：原 design 20 / asset 10 / platform 10，合并取 20（三域并发量不同，20 足够）
+      maximum-pool-size: ${CORE_DB_POOL_SIZE:20}
+
+  # 设计域存在 SSE 长连接，不能按普通请求超时掐断（原 design 配置）
+  mvc:
+    async:
+      request-timeout: -1
+
+  # MQ：与 predict 共用 synpharm.exchange（direct, durable），队列与路由键见《03-实现级详细设计》§7
+  rabbitmq:
+    host: ${RABBITMQ_HOST:localhost}
+    port: ${RABBITMQ_PORT:5672}
+    username: ${RABBITMQ_USERNAME:guest}
+    password: ${RABBITMQ_PASSWORD:guest}
+    virtual-host: ${RABBITMQ_VHOST:/}
+    listener:
+      simple:
+        prefetch: ${RABBITMQ_PREFETCH:10}
+        # 规范 §7：3 次指数退避后进 design.dlq；因此拒绝后不重新入队（否则会无限重投）
+        retry:
+          enabled: true
+          max-attempts: 3
+          initial-interval: 1s
+          multiplier: 2
+          max-interval: 10s
+        default-requeue-rejected: false
+
+  # 上传走 multipart：单文件与请求上限都要放开，否则大结构文件会被容器先拒掉（原 asset 配置）
+  servlet:
+    multipart:
+      max-file-size: ${ASSET_MAX_FILE_SIZE:200MB}
+      max-request-size: ${ASSET_MAX_REQUEST_SIZE:220MB}
+
+mybatis-plus:
+  mapper-locations: classpath*:/mapper/**/*.xml
+  # 三域实体都要能被别名解析
+  type-aliases-package: com.synpharm.design.domain.model,com.synpharm.asset.domain.model,com.synpharm.platform.domain.model
+  configuration:
+    map-underscore-to-camel-case: true
+  global-config:
+    db-config:
+      id-type: auto
+      # 逻辑删除：绝大多数表有 deleted 列（evaluation_result 是追加型结果表，没有）
+      logic-delete-field: deleted
+      logic-delete-value: 1
+      logic-not-delete-value: 0
+
+synpharm:
+  internal:
+    # 网关注入 X-Internal-Token 用的共享口令；未配置则本服务拒绝信任任何身份头（fail-closed）
+    token: ${INTERNAL_TOKEN:}
+  # 注意：原 design 的 synpharm.platform.base-url / connect-timeout-ms / read-timeout-ms 已删除。
+  # 工具注册表现在是同进程内的 ToolRegistryService，不再有 HTTP 调用与超时。
+
+# 算法引擎（FastAPI）：/api/system/algorithm-health 的能力探测 + design_tool.available 刷新
+fastapi:
+  base-url: ${FASTAPI_URL:http://localhost:8000}
+  api-key: ${FASTAPI_API_KEY:}
+  health-timeout: ${FASTAPI_HEALTH_TIMEOUT:5000}
+  health-retries: ${FASTAPI_HEALTH_RETRIES:2}
+  health-breaker-threshold: ${FASTAPI_HEALTH_BREAKER_THRESHOLD:5}
+  health-breaker-open-ms: ${FASTAPI_HEALTH_BREAKER_OPEN_MS:30000}
+  # 能力矩阵 GET /v1/evaluate/capabilities 的超时（设计书 04 §2：P95 < 50ms）
+  probe-timeout: ${FASTAPI_PROBE_TIMEOUT:5000}
+
+# 能力探测调度（红线 R1：design_tool.available 的唯一数据源）
+platform:
+  probe:
+    # 定时全量刷新间隔，契约 03 §6.1 要求 10 分钟
+    interval-ms: ${PROBE_INTERVAL_MS:600000}
+    # 首次延迟：给引擎留出启动时间，避免开机就把一批「引擎不可达」写进库、污染首屏
+    initial-delay-ms: ${PROBE_INITIAL_DELAY_MS:20000}
+
+knife4j:
+  enable: ${KNIFE4J_ENABLED:true}
+  setting:
+    language: zh_cn
+
+app:
+  name: ${APP_NAME:SynPharm}
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info
+  endpoint:
+    health:
+      show-details: always
+
+logging:
+  level:
+    com.synpharm: ${LOG_LEVEL:info}

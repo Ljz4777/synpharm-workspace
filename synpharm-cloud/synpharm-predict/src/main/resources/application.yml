@@ -1,0 +1,112 @@
+server:
+  port: ${SERVER_PORT:8082}
+
+spring:
+  application:
+    name: synpharm-predict
+
+  cloud:
+    nacos:
+      server-addr: ${NACOS_SERVER_ADDR:localhost:8848}
+      username: ${NACOS_USERNAME:nacos}
+      password: ${NACOS_PASSWORD:nacos}
+      discovery:
+        enabled: ${NACOS_DISCOVERY_ENABLED:true}
+        register-enabled: ${NACOS_REGISTER_ENABLED:true}
+        namespace: ${NACOS_NAMESPACE:}
+        group: ${NACOS_GROUP:DEFAULT_GROUP}
+        fail-fast: false
+      config:
+        import-check:
+          enabled: false
+
+  # 本服务专属 schema；账号只对本 schema 有权限（拆分铁律 R2）
+  # 注意：表当前还留在 synpharm（单体在用），搬迁必须先搬代码后搬表
+  datasource:
+    driver-class-name: com.mysql.cj.jdbc.Driver
+    url: jdbc:mysql://${DB_HOST:localhost}:${DB_PORT:3306}/${PREDICT_DB_NAME:synpharm_predict}?useUnicode=true&characterEncoding=utf8&serverTimezone=Asia/Shanghai
+    username: ${PREDICT_DB_USER:synpharm_predict}
+    password: ${PREDICT_DB_PASSWORD:}
+    hikari:
+      maximum-pool-size: ${PREDICT_DB_POOL_SIZE:20}
+
+  rabbitmq:
+    host: ${RABBITMQ_HOST:localhost}
+    port: ${RABBITMQ_PORT:5672}
+    username: ${RABBITMQ_USERNAME:guest}
+    password: ${RABBITMQ_PASSWORD:guest}
+    virtual-host: ${RABBITMQ_VHOST:/}
+
+  # PdbResolver / UniProtResolver 的外部抓取缓存，以及批量任务的进度缓存
+  data:
+    redis:
+      host: ${REDIS_HOST:localhost}
+      port: ${REDIS_PORT:6379}
+      password: ${REDIS_PASSWORD:}
+      timeout: 3s
+
+  # 批量上传走 multipart，与单体一致放宽到 100MB，否则一次上传几千行会被网关/容器拒绝
+  servlet:
+    multipart:
+      max-file-size: ${FILE_MAX_SIZE:100MB}
+      max-request-size: ${FILE_MAX_REQUEST_SIZE:100MB}
+
+mybatis-plus:
+  mapper-locations: classpath*:/mapper/**/*.xml
+  type-aliases-package: com.synpharm.predict.domain.model
+  configuration:
+    map-underscore-to-camel-case: true
+  global-config:
+    db-config:
+      id-type: auto
+      logic-delete-field: deleted
+      logic-delete-value: 1
+      logic-not-delete-value: 0
+
+synpharm:
+  internal:
+    # 网关注入 X-Internal-Token 用的共享口令；未配置则本服务拒绝信任任何身份头（fail-closed）
+    token: ${INTERNAL_TOKEN:}
+
+# 算法引擎（FastAPI）。timeout-single / timeout-batch 在 WebClientConfig 里**没有默认值**，
+# 这里必须给出，否则启动即失败。
+fastapi:
+  base-url: ${FASTAPI_URL:http://localhost:8000}
+  api-key: ${FASTAPI_API_KEY:}
+  timeout-single: ${FASTAPI_TIMEOUT_SINGLE:30000}
+  timeout-batch: ${FASTAPI_TIMEOUT_BATCH:60000}
+  health-timeout: ${FASTAPI_HEALTH_TIMEOUT:5000}
+  health-retries: ${FASTAPI_HEALTH_RETRIES:2}
+  health-breaker-threshold: ${FASTAPI_HEALTH_BREAKER_THRESHOLD:5}
+  health-breaker-open-ms: ${FASTAPI_HEALTH_BREAKER_OPEN_MS:30000}
+
+# 输入解析：UniProt / RCSB PDB 外部数据源与缓存
+prediction:
+  resolver:
+    uniprot-base-url: ${UNIPROT_BASE_URL:https://rest.uniprot.org}
+    rcsb-base-url: ${RCSB_BASE_URL:https://data.rcsb.org}
+    connect-timeout-ms: ${RESOLVER_CONNECT_TIMEOUT:3000}
+    read-timeout-ms: ${RESOLVER_READ_TIMEOUT:5000}
+    cache-ttl-hours: ${RESOLVER_CACHE_TTL_HOURS:24}
+    negative-cache-ttl-minutes: ${RESOLVER_NEGATIVE_CACHE_TTL_MINUTES:10}
+
+# 批量上传的落盘目录。
+# 注意：方案 C-4 计划把这部分收归 asset 服务（内容寻址）；在此之前仍由 predict 直读本地卷，
+# 因此容器里这是**必须持久化**的目录，否则重启后历史批量结果文件会 404。
+# 刻意不用 /app 下的路径：/app 在编排里是挂载的源码树，写进去会污染仓库。
+file:
+  upload-dir: ${FILE_UPLOAD_DIR:/data/uploads}
+  result-dir: ${FILE_RESULT_DIR:/data/results}
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info
+  endpoint:
+    health:
+      show-details: always
+
+logging:
+  level:
+    com.synpharm: ${LOG_LEVEL:info}

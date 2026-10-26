@@ -1,0 +1,2834 @@
+openapi: 3.0.3
+
+# =============================================================================
+# SynPharm · AI 药物分子设计平台 API 契约（设计域）
+#
+# 版本 : 1.0.0
+# 日期 : 2026-10-13
+# 上游 : docs/design/AI药物分子设计平台-详细设计书.md §4
+# 细化 : docs/design/detailed/02-接口层详细设计.md
+#
+# 性质 : 「手写种子版」契约。最终以后端 Knife4j 导出的 /v3/api-docs 为准
+#        （见 02-接口层详细设计.md §8），CI 中经 openapi-typescript 生成前端类型。
+#
+# 约定 :
+#   - 统一响应信封 Result<T>{code,errorCode,message,data}
+#   - 分页 {list,total,page,pageSize,hasNext}
+#   - 耗时写操作 202 + {jobId,jobNo,status}
+#   - 归属校验失败一律 404（红线 R4）
+# =============================================================================
+
+info:
+  title: SynPharm Design Domain API
+  version: 1.0.0
+  description: |
+    AI 药物分子设计平台（设计域）对外接口。
+
+    **认证**：`Authorization: Bearer <JWT>`
+
+    **红线**：
+    - R1 真实性边界 —— 响应中的 `realness` 与 `redistributed` 不得省略；
+    - R2 禁止愿望式契约 —— 能力相关字段一律可空并配 `capabilityKey`；
+    - R4 归属校验 —— 跨用户资源返回 `404`（非 `403`）；
+    - R5 事务边界 —— 写操作仅本地写，MQ 投递 `afterCommit`。
+
+servers:
+  - url: http://localhost:8080
+    description: 本地（Docker dev，后端映射宿主 8080）
+  - url: /
+    description: 生产（前端 nginx 同源反代 /api）
+
+tags:
+  - name: library
+    description: 4.3.1 知识库（疾病/靶点/分子形式/约束模板/目标/检测类型）
+  - name: project
+    description: 4.3.2 项目与轮次
+  - name: target
+    description: 4.3.3 靶点与口袋
+  - name: constraint
+    description: 4.3.4 约束
+  - name: generation
+    description: 4.3.5 生成与候选
+  - name: edit
+    description: 4.3.6 编辑（同步，保存即编译）
+  - name: evaluation
+    description: 4.3.7 评估
+  - name: job
+    description: 4.3.8 统一任务
+  - name: report
+    description: 4.3.9 报告与审批
+  - name: experiment
+    description: 4.3.10 湿实验与回灌
+  - name: tool
+    description: 4.3.11 工具与能力
+  - name: workspace
+    description: 4.3.12 工作站（横向层）
+  - name: file
+    description: 4.3.13 文件（对象存储）
+
+security:
+  - bearerAuth: []
+
+paths:
+
+  # ===========================================================================
+  # 4.3.1 知识库
+  # ===========================================================================
+  /api/design/library:
+    get:
+      tags: [library]
+      summary: 知识库检索
+      operationId: listLibraryItems
+      parameters:
+        - $ref: '#/components/parameters/Category'
+        - $ref: '#/components/parameters/ParentId'
+        - $ref: '#/components/parameters/Keyword'
+        - name: enabled
+          in: query
+          schema: { type: boolean }
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/PageSize'
+      responses:
+        '200': { $ref: '#/components/responses/PageOfLibraryItem' }
+        '400': { $ref: '#/components/responses/Error' }
+        '401': { $ref: '#/components/responses/Error' }
+    post:
+      tags: [library]
+      summary: 新建知识项
+      operationId: createLibraryItem
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/LibraryItemUpsert' }
+      responses:
+        '201': { $ref: '#/components/responses/LibraryItem' }
+        '409': { $ref: '#/components/responses/Error' }
+
+  /api/design/library/tree:
+    get:
+      tags: [library]
+      summary: 某分类完整层级树（一次拉全，驱动下拉/级联）
+      operationId: getLibraryTree
+      parameters:
+        - $ref: '#/components/parameters/Category'
+        - name: enabledOnly
+          in: query
+          schema: { type: boolean, default: true }
+      responses:
+        '200':
+          description: 树（children 递归）
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Result'
+                  - properties:
+                      data:
+                        type: array
+                        items: { $ref: '#/components/schemas/LibraryItemNode' }
+
+  /api/design/library/{id}:
+    parameters:
+      - $ref: '#/components/parameters/PathId'
+    get:
+      tags: [library]
+      summary: 知识项详情
+      operationId: getLibraryItem
+      responses:
+        '200': { $ref: '#/components/responses/LibraryItem' }
+        '404': { $ref: '#/components/responses/Error' }
+    patch:
+      tags: [library]
+      summary: 更新（builtin=1 仅允许改 enabled/sortNo/remark）
+      operationId: patchLibraryItem
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/LibraryItemUpsert' }
+      responses:
+        '200': { $ref: '#/components/responses/LibraryItem' }
+        '409': { $ref: '#/components/responses/Error' }
+    delete:
+      tags: [library]
+      summary: 逻辑删除（有子节点时拒绝）
+      operationId: deleteLibraryItem
+      responses:
+        '200': { $ref: '#/components/responses/OkVoid' }
+        '409': { $ref: '#/components/responses/Error' }
+
+  # ===========================================================================
+  # 4.3.2 项目与轮次
+  # ===========================================================================
+  /api/design/projects:
+    get:
+      tags: [project]
+      summary: 我的项目列表
+      operationId: listProjects
+      parameters:
+        - name: status
+          in: query
+          schema: { $ref: '#/components/schemas/ProjectStatus' }
+        - $ref: '#/components/parameters/Keyword'
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/PageSize'
+      responses:
+        '200': { $ref: '#/components/responses/PageOfProject' }
+    post:
+      tags: [project]
+      summary: 新建项目（可内联约束规则）
+      operationId: createProject
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ProjectCreateRequest' }
+      responses:
+        '201':
+          description: 创建成功（含 readyBlockers 说明还差什么才能 READY）
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Result'
+                  - properties:
+                      data: { $ref: '#/components/schemas/ProjectCreatedResponse' }
+        '400': { $ref: '#/components/responses/Error' }
+        '409': { $ref: '#/components/responses/Error' }
+
+  /api/design/projects/{id}:
+    parameters:
+      - $ref: '#/components/parameters/PathId'
+    get:
+      tags: [project]
+      summary: 项目详情（含靶点、轮次、候选统计）
+      operationId: getProject
+      responses:
+        '200': { $ref: '#/components/responses/Project' }
+        '404': { $ref: '#/components/responses/Error' }
+    patch:
+      tags: [project]
+      summary: 改名称/目标/疾病/分子形式（PUT 为别名）
+      operationId: patchProject
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ProjectPatchRequest' }
+      responses:
+        '200': { $ref: '#/components/responses/Project' }
+        '409': { $ref: '#/components/responses/Error' }
+
+  /api/design/projects/{id}/targets:
+    parameters:
+      - $ref: '#/components/parameters/PathId'
+    post:
+      tags: [project]
+      summary: 绑定靶点
+      operationId: bindProjectTarget
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ProjectTargetBindRequest' }
+      responses:
+        '201': { $ref: '#/components/responses/OkObject' }
+        '409': { $ref: '#/components/responses/Error' }
+
+  /api/design/projects/{id}/targets/{targetId}:
+    parameters:
+      - $ref: '#/components/parameters/PathId'
+      - name: targetId
+        in: path
+        required: true
+        schema: { type: integer, format: int64 }
+    delete:
+      tags: [project]
+      summary: 解绑靶点
+      operationId: unbindProjectTarget
+      responses:
+        '200': { $ref: '#/components/responses/OkVoid' }
+
+  /api/design/projects/{id}/constraints:
+    parameters:
+      - $ref: '#/components/parameters/PathId'
+    get:
+      tags: [project]
+      summary: 当前生效约束集 + 规则
+      operationId: getProjectConstraints
+      responses:
+        '200': { $ref: '#/components/responses/ConstraintSet' }
+    post:
+      tags: [project]
+      summary: 绑定 / 激活约束集
+      operationId: bindProjectConstraints
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                constraintSetId: { type: integer, format: int64 }
+                activate: { type: boolean, default: true }
+      responses:
+        '200': { $ref: '#/components/responses/ConstraintSet' }
+
+  /api/design/projects/{id}/rounds:
+    parameters:
+      - $ref: '#/components/parameters/PathId'
+    post:
+      tags: [project]
+      summary: 开启新一轮
+      operationId: openRound
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/RoundOpenRequest' }
+      responses:
+        '201': { $ref: '#/components/responses/Round' }
+        '409': { $ref: '#/components/responses/Error' }
+
+  /api/design/projects/{id}/next-round:
+    parameters:
+      - $ref: '#/components/parameters/PathId'
+    post:
+      tags: [project]
+      summary: 启动下一轮迭代（202，可链式投递生成任务）
+      operationId: nextRound
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/NextRoundRequest' }
+      responses:
+        '202': { $ref: '#/components/schemas/AcceptedNextRound' }
+        '409': { $ref: '#/components/responses/Error' }
+
+  /api/design/rounds/{id}/close:
+    parameters:
+      - $ref: '#/components/parameters/PathId'
+    post:
+      tags: [project]
+      summary: 关闭轮次并写结论
+      operationId: closeRound
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                conclusionText: { type: string }
+      responses:
+        '200': { $ref: '#/components/responses/Round' }
+
+  /api/design/projects/{id}/close:
+    parameters:
+      - $ref: '#/components/parameters/PathId'
+    post:
+      tags: [project]
+      summary: 结项
+      operationId: closeProject
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                summary: { type: string }
+      responses:
+        '200': { $ref: '#/components/responses/Project' }
+
+  /api/design/projects/{id}/archive:
+    parameters:
+      - $ref: '#/components/parameters/PathId'
+    post:
+      tags: [project]
+      summary: 归档
+      operationId: archiveProject
+      responses:
+        '200': { $ref: '#/components/responses/Project' }
+
+  /api/design/projects/{id}/timeline:
+    parameters:
+      - $ref: '#/components/parameters/PathId'
+    get:
+      tags: [project]
+      summary: 项目时间线（各轮 + 各任务汇总）
+      operationId: getProjectTimeline
+      responses:
+        '200': { $ref: '#/components/responses/OkObject' }
+
+  /api/design/projects/{id}/tree:
+    parameters:
+      - $ref: '#/components/parameters/PathId'
+    get:
+      tags: [project]
+      summary: 工作台左栏树（一次拉全）
+      operationId: getProjectTree
+      responses:
+        '200': { $ref: '#/components/responses/OkObject' }
+
+  /api/design/projects/{id}/leaderboard:
+    parameters:
+      - $ref: '#/components/parameters/PathId'
+    get:
+      tags: [project]
+      summary: 排行榜（按加权总分或任意指标排序）
+      description: |
+        响应必须包含 `weightsSnapshot` 与 `redistributed`（红线 R1 可复现性）。
+        偏页 > 1000 时返回 409 USE_CURSOR，改用 afterScore/afterId 键集分页。
+      operationId: getLeaderboard
+      parameters:
+        - name: roundId
+          in: query
+          required: true
+          schema: { type: integer, format: int64 }
+        - name: sortBy
+          in: query
+          schema: { type: string, default: total_score }
+          description: 白名单字段（total_score 或 metricCode）
+        - name: order
+          in: query
+          schema: { type: string, enum: [asc, desc], default: desc }
+        - name: afterScore
+          in: query
+          schema: { type: number }
+        - name: afterId
+          in: query
+          schema: { type: integer, format: int64 }
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/PageSize'
+      responses:
+        '200': { $ref: '#/components/responses/Leaderboard' }
+        '409': { $ref: '#/components/responses/Error' }
+
+  /api/design/projects/{id}/experiment-accuracy:
+    parameters:
+      - $ref: '#/components/parameters/PathId'
+    get:
+      tags: [project]
+      summary: 实测准确率矩阵（报告强制项）
+      operationId: getExperimentAccuracy
+      responses:
+        '200': { $ref: '#/components/responses/ExperimentAccuracy' }
+
+  # ===========================================================================
+  # 4.3.3 靶点与口袋
+  # ===========================================================================
+  /api/design/targets:
+    get:
+      tags: [target]
+      summary: 靶点库列表
+      operationId: listTargets
+      parameters:
+        - $ref: '#/components/parameters/Keyword'
+        - name: targetType
+          in: query
+          schema: { type: string }
+        - name: diseaseArea
+          in: query
+          schema: { type: string }
+        - name: status
+          in: query
+          schema: { type: string, enum: [supported, beta, planned] }
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/PageSize'
+      responses:
+        '200': { $ref: '#/components/responses/PageOfTarget' }
+    post:
+      tags: [target]
+      summary: 按 UniProt ID 新建/导入靶点
+      operationId: importTarget
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [uniprotId]
+              properties:
+                uniprotId: { type: string, example: P00533 }
+                fetchSequence: { type: boolean, default: true }
+      responses:
+        '201': { $ref: '#/components/responses/Target' }
+        '409': { $ref: '#/components/responses/Error' }
+
+  /api/design/targets/{id}:
+    parameters:
+      - $ref: '#/components/parameters/PathId'
+    get:
+      tags: [target]
+      summary: 靶点详情（含结构与口袋）
+      operationId: getTarget
+      responses:
+        '200': { $ref: '#/components/responses/Target' }
+        '404': { $ref: '#/components/responses/Error' }
+
+  /api/design/targets/{id}/structures:
+    parameters:
+      - $ref: '#/components/parameters/PathId'
+    post:
+      tags: [target]
+      summary: 绑定结构（拉取 + 落对象存储）
+      operationId: bindStructure
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                pdbId: { type: string, example: 1M17 }
+                chainId: { type: string, example: A }
+                source: { type: string, enum: [PDB, ALPHAFOLD], default: PDB }
+      responses:
+        '202': { $ref: '#/components/responses/Accepted' }
+
+  /api/design/structures/upload:
+    post:
+      tags: [target]
+      summary: 上传自有结构（USER_UPLOAD）
+      operationId: uploadStructure
+      requestBody:
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              properties:
+                targetId: { type: integer, format: int64 }
+                file: { type: string, format: binary }
+      responses:
+        '202': { $ref: '#/components/responses/Accepted' }
+
+  /api/design/structures/{id}/detect-pockets:
+    parameters:
+      - $ref: '#/components/parameters/PathId'
+    post:
+      tags: [target]
+      summary: 触发口袋检测（202）
+      operationId: detectPockets
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                methods:
+                  type: array
+                  items: { type: string, enum: [P2RANK, FPOCKET, LIGAND_BASED] }
+                topN: { type: integer, default: 10 }
+      responses:
+        '202': { $ref: '#/components/responses/Accepted' }
+
+  /api/design/structures/{id}/pockets:
+    parameters:
+      - $ref: '#/components/parameters/PathId'
+    get:
+      tags: [target]
+      summary: 口袋列表
+      operationId: listPockets
+      responses:
+        '200': { $ref: '#/components/responses/OkObject' }
+        # v1.8.0 补登记：原契约只写了 200，但「结构不存在」与「结构存在但没有口袋」
+        # 必须可区分 —— 都用 200 + 空数组等于告诉前端「这个结构一个口袋都没有」
+        '404': { $ref: '#/components/responses/Error' }
+
+  /api/design/structures/{id}/pockets/custom:
+    parameters:
+      - $ref: '#/components/parameters/PathId'
+    post:
+      tags: [target]
+      summary: 自定义口袋中心
+      operationId: createCustomPocket
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/PocketCreateRequest' }
+      responses:
+        '201': { $ref: '#/components/responses/OkObject' }
+
+  /api/design/pockets/{id}/select:
+    parameters:
+      - $ref: '#/components/parameters/PathId'
+    post:
+      tags: [target]
+      summary: 选定设计口袋（单例，切换在事务内先清零）
+      operationId: selectPocket
+      responses:
+        '200': { $ref: '#/components/responses/OkVoid' }
+        '409': { $ref: '#/components/responses/Error' }
+
+  # ===========================================================================
+  # 4.3.4 约束
+  # ===========================================================================
+  /api/design/constraints:
+    get:
+      tags: [constraint]
+      summary: 我的约束集列表
+      operationId: listConstraintSets
+      parameters:
+        - name: status
+          in: query
+          schema: { type: string, enum: [DRAFT, ACTIVE, ARCHIVED] }
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/PageSize'
+      responses:
+        '200': { $ref: '#/components/responses/PageOfConstraintSet' }
+    post:
+      tags: [constraint]
+      summary: 新建约束集（可含规则）
+      operationId: createConstraintSet
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ConstraintSetUpsert' }
+      responses:
+        '201': { $ref: '#/components/responses/ConstraintSet' }
+
+  /api/design/constraints/validate:
+    post:
+      tags: [constraint]
+      summary: 校验一组规则（同步，驱动编辑器实时反馈）
+      operationId: validateConstraintRules
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                rules:
+                  type: array
+                  items: { $ref: '#/components/schemas/ConstraintRule' }
+      responses:
+        '200': { $ref: '#/components/responses/OkObject' }
+        '400': { $ref: '#/components/responses/Error' }
+
+  /api/design/constraints/meta:
+    get:
+      tags: [constraint]
+      summary: 可用 ruleType / field / catalog / dimension 枚举
+      operationId: getConstraintMeta
+      responses:
+        '200': { $ref: '#/components/responses/OkObject' }
+
+  /api/design/constraints/{id}:
+    parameters:
+      - $ref: '#/components/parameters/PathId'
+    get:
+      tags: [constraint]
+      summary: 详情（含规则）
+      operationId: getConstraintSet
+      responses:
+        '200': { $ref: '#/components/responses/ConstraintSet' }
+        '404': { $ref: '#/components/responses/Error' }
+    patch:
+      tags: [constraint]
+      summary: 编辑（仅 DRAFT 可改）
+      operationId: patchConstraintSet
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ConstraintSetUpsert' }
+      responses:
+        '200': { $ref: '#/components/responses/ConstraintSet' }
+        '409': { $ref: '#/components/responses/Error' }
+
+  /api/design/constraints/{id}/activate:
+    parameters:
+      - $ref: '#/components/parameters/PathId'
+    post:
+      tags: [constraint]
+      summary: 激活（先自检）
+      operationId: activateConstraintSet
+      responses:
+        '200': { $ref: '#/components/responses/ConstraintSet' }
+        '400': { $ref: '#/components/responses/Error' }
+
+  /api/design/constraints/{id}/archive:
+    parameters:
+      - $ref: '#/components/parameters/PathId'
+    post:
+      tags: [constraint]
+      summary: 归档
+      operationId: archiveConstraintSet
+      responses:
+        '200': { $ref: '#/components/responses/ConstraintSet' }
+
+  # ===========================================================================
+  # 4.3.5 生成与候选
+  # ===========================================================================
+  /api/design/projects/{id}/generation-jobs:
+    parameters:
+      - $ref: '#/components/parameters/PathId'
+    post:
+      tags: [generation]
+      summary: 提交生成任务（202）
+      operationId: submitGenerationJob
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/GenerationJobRequest' }
+      responses:
+        '202': { $ref: '#/components/responses/Accepted' }
+        '409': { $ref: '#/components/responses/Error' }
+        '429': { $ref: '#/components/responses/Error' }
+
+  /api/design/generations:
+    get:
+      tags: [generation]
+      summary: 生成历史（按项目/轮次）
+      operationId: listGenerations
+      parameters:
+        - name: projectId
+          in: query
+          schema: { type: integer, format: int64 }
+        - name: roundId
+          in: query
+          schema: { type: integer, format: int64 }
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/PageSize'
+      responses:
+        '200': { $ref: '#/components/responses/OkObject' }
+    post:
+      tags: [generation]
+      summary: 提交生成（模块路径别名，等价于 projects/{id}/generation-jobs）
+      operationId: submitGeneration
+      responses:
+        '202': { $ref: '#/components/responses/Accepted' }
+
+  /api/design/generations/{id}:
+    parameters:
+      - $ref: '#/components/parameters/PathId'
+    get:
+      tags: [generation]
+      summary: 任务状态与统计
+      operationId: getGeneration
+      responses:
+        '200': { $ref: '#/components/responses/OkObject' }
+        '404': { $ref: '#/components/responses/Error' }
+
+  /api/design/generations/{id}/cancel:
+    parameters:
+      - $ref: '#/components/parameters/PathId'
+    post:
+      tags: [generation]
+      summary: 取消生成任务
+      operationId: cancelGeneration
+      responses:
+        '200': { $ref: '#/components/responses/OkVoid' }
+        '409': { $ref: '#/components/responses/Error' }
+
+  /api/design/projects/{id}/candidates:
+    parameters:
+      - $ref: '#/components/parameters/PathId'
+    get:
+      tags: [generation]
+      summary: 候选列表（轮次/评审状态/排序，分页）
+      operationId: listProjectCandidates
+      parameters:
+        - name: roundId
+          in: query
+          schema: { type: integer, format: int64 }
+        - name: reviewStatus
+          in: query
+          schema: { $ref: '#/components/schemas/ReviewStatus' }
+        - name: modalityCode
+          in: query
+          schema: { $ref: '#/components/schemas/ModalityCode' }
+        - $ref: '#/components/parameters/SortBy'
+        - $ref: '#/components/parameters/Order'
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/PageSize'
+      responses:
+        '200': { $ref: '#/components/responses/PageOfCandidate' }
+
+  /api/design/candidates:
+    get:
+      tags: [generation]
+      summary: 候选列表（模块路径别名）
+      operationId: listCandidates
+      responses:
+        '200': { $ref: '#/components/responses/PageOfCandidate' }
+
+  /api/design/candidates/ranked:
+    get:
+      tags: [evaluation]
+      summary: 按综合得分/任意指标排序的候选列表
+      operationId: listRankedCandidates
+      parameters:
+        - name: projectId
+          in: query
+          required: true
+          schema: { type: integer, format: int64 }
+        - name: runId
+          in: query
+          schema: { type: integer, format: int64 }
+        - name: metricCode
+          in: query
+          schema: { type: string }
+        - $ref: '#/components/parameters/Order'
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/PageSize'
+      responses:
+        '200': { $ref: '#/components/responses/PageOfCandidate' }
+
+  /api/design/candidates/import:
+    post:
+      tags: [generation]
+      summary: 手工导入（SMILES 或序列，按分子形式判定）
+      operationId: importCandidates
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [projectId, modalityCode, items]
+              properties:
+                projectId: { type: integer, format: int64 }
+                roundId: { type: integer, format: int64 }
+                modalityCode: { $ref: '#/components/schemas/ModalityCode' }
+                items:
+                  type: array
+                  items:
+                    type: object
+                    properties:
+                      smiles: { type: string, nullable: true }
+                      sequence: { type: string, nullable: true }
+                      moleculeName: { type: string }
+      responses:
+        '201': { $ref: '#/components/responses/OkObject' }
+        '409': { $ref: '#/components/responses/Error' }
+
+  /api/design/candidates/export:
+    get:
+      tags: [generation]
+      summary: 导出 CSV / SDF
+      operationId: exportCandidates
+      parameters:
+        - name: projectId
+          in: query
+          required: true
+          schema: { type: integer, format: int64 }
+        - name: format
+          in: query
+          schema: { type: string, enum: [csv, sdf], default: csv }
+      responses:
+        '200':
+          description: 文件流
+          content:
+            text/csv:
+              schema: { type: string }
+            chemical/x-mdl-sdfile:
+              schema: { type: string, format: binary }
+
+  /api/design/candidates/{id}:
+    parameters:
+      - $ref: '#/components/parameters/PathId'
+    get:
+      tags: [generation]
+      summary: 候选详情（生成参数 + 全部指标 + 血缘摘要）
+      operationId: getCandidate
+      responses:
+        '200': { $ref: '#/components/responses/Candidate' }
+        '404': { $ref: '#/components/responses/Error' }
+
+  /api/design/candidates/{id}/review:
+    parameters:
+      - $ref: '#/components/parameters/PathId'
+    patch:
+      tags: [generation]
+      summary: 改评审状态 + 标签 + 备注
+      operationId: reviewCandidate
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                reviewStatus: { $ref: '#/components/schemas/ReviewStatus' }
+                batchTag: { type: string }
+                note: { type: string }
+      responses:
+        '200': { $ref: '#/components/responses/Candidate' }
+
+  /api/design/candidates/{id}/lineage:
+    parameters:
+      - $ref: '#/components/parameters/PathId'
+    get:
+      tags: [generation]
+      summary: 版本血缘树
+      operationId: getCandidateLineage
+      responses:
+        '200': { $ref: '#/components/responses/OkObject' }
+
+  /api/design/candidates/{id}/regenerate:
+    parameters:
+      - $ref: '#/components/parameters/PathId'
+    post:
+      tags: [generation]
+      summary: 以该分子为新种子重跑生成（202）
+      operationId: regenerateFromCandidate
+      responses:
+        '202': { $ref: '#/components/responses/Accepted' }
+
+  # ===========================================================================
+  # 4.3.6 编辑（同步）
+  # ===========================================================================
+  /api/design/candidates/{id}/edit-options:
+    parameters:
+      - $ref: '#/components/parameters/PathId'
+    get:
+      tags: [edit]
+      summary: 可用编辑策略（按 modalityCode + 能力过滤）
+      operationId: getEditOptions
+      responses:
+        '200': { $ref: '#/components/responses/OkObject' }
+
+  /api/design/candidates/{id}/edits:
+    parameters:
+      - $ref: '#/components/parameters/PathId'
+    post:
+      tags: [edit]
+      summary: 执行编辑（同步，产新版本；previewOnly 时不落库）
+      description: |
+        目标 P95 < 1.5s（"保存即编译"）。
+        同事务：插 candidate_molecule(origin_type=EDITED) + molecule_edit_log；
+        快评结果在另一短事务写 evaluation_result。
+      operationId: executeEdit
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/MoleculeEditRequest' }
+      responses:
+        '201':
+          description: 编辑成功（previewOnly=true 时返回 200 且不落库）
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Result'
+                  - properties:
+                      data: { $ref: '#/components/schemas/MoleculeEditResponse' }
+        '400': { $ref: '#/components/responses/Error' }
+        '409': { $ref: '#/components/responses/Error' }
+
+  /api/design/molecules/{id}/edit:
+    parameters:
+      - $ref: '#/components/parameters/PathId'
+    post:
+      tags: [edit]
+      summary: 执行编辑（模块路径别名）
+      operationId: executeEditAlias
+      responses:
+        '201': { $ref: '#/components/responses/OkObject' }
+
+  /api/design/molecules/{id}/edit/preview:
+    parameters:
+      - $ref: '#/components/parameters/PathId'
+    post:
+      tags: [edit]
+      summary: 只预览产物，不落库
+      operationId: previewEdit
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/MoleculeEditRequest' }
+      responses:
+        '200': { $ref: '#/components/responses/OkObject' }
+
+  /api/design/molecules/{id}/history:
+    parameters:
+      - $ref: '#/components/parameters/PathId'
+    get:
+      tags: [edit]
+      summary: 编辑历史
+      operationId: getEditHistory
+      responses:
+        '200': { $ref: '#/components/responses/OkObject' }
+
+  /api/design/molecules/{id}/revert:
+    parameters:
+      - $ref: '#/components/parameters/PathId'
+    post:
+      tags: [edit]
+      summary: 以某祖先为父建立分支
+      operationId: revertMolecule
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                ancestorMolId: { type: integer, format: int64 }
+      responses:
+        '201': { $ref: '#/components/responses/OkObject' }
+        '409': { $ref: '#/components/responses/Error' }
+
+  /api/design/edit-strategies:
+    get:
+      tags: [edit]
+      summary: 策略元数据 + 参数 schema
+      operationId: listEditStrategies
+      responses:
+        '200': { $ref: '#/components/responses/OkObject' }
+
+  # ===========================================================================
+  # 4.3.7 评估
+  # ===========================================================================
+  /api/design/evaluations:
+    post:
+      tags: [evaluation]
+      summary: 创建评估任务（202）
+      operationId: createEvaluation
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/EvaluationJobRequest' }
+      responses:
+        '202': { $ref: '#/components/responses/Accepted' }
+        '429': { $ref: '#/components/responses/Error' }
+
+  /api/design/evaluations/jobs:
+    post:
+      tags: [evaluation]
+      summary: 批量评估（需求路径，等价）
+      operationId: createEvaluationJobs
+      responses:
+        '202': { $ref: '#/components/responses/Accepted' }
+
+  /api/design/evaluations/{id}:
+    parameters:
+      - $ref: '#/components/parameters/PathId'
+    get:
+      tags: [evaluation]
+      summary: 任务状态与统计
+      operationId: getEvaluation
+      responses:
+        '200': { $ref: '#/components/responses/OkObject' }
+
+  /api/design/evaluations/{id}/cancel:
+    parameters:
+      - $ref: '#/components/parameters/PathId'
+    post:
+      tags: [evaluation]
+      summary: 取消评估
+      operationId: cancelEvaluation
+      responses:
+        '200': { $ref: '#/components/responses/OkVoid' }
+
+  /api/design/candidates/{id}/metrics:
+    parameters:
+      - $ref: '#/components/parameters/PathId'
+    get:
+      tags: [evaluation]
+      summary: 单候选全部指标明细
+      operationId: getCandidateMetrics
+      parameters:
+        - name: runId
+          in: query
+          schema: { type: integer, format: int64 }
+      responses:
+        '200': { $ref: '#/components/responses/OkObject' }
+
+  /api/design/metrics/meta:
+    get:
+      tags: [evaluation]
+      summary: 指标定义列表
+      operationId: listMetricDefinitions
+      parameters:
+        - name: dimension
+          in: query
+          schema: { type: string }
+        - name: modalityCode
+          in: query
+          schema: { $ref: '#/components/schemas/ModalityCode' }
+      responses:
+        '200': { $ref: '#/components/responses/OkObject' }
+
+  /api/design/metrics/{code}/weight:
+    parameters:
+      - name: code
+        in: path
+        required: true
+        schema: { type: string }
+    patch:
+      tags: [evaluation]
+      summary: 调整权重并触发增量重算
+      operationId: patchMetricWeight
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [weight]
+              properties:
+                weight: { type: number, format: double, minimum: 0, maximum: 1 }
+                projectId: { type: integer, format: int64 }
+      responses:
+        '200': { $ref: '#/components/responses/OkObject' }
+
+  /api/design/rounds/{id}/metrics:
+    parameters:
+      - $ref: '#/components/parameters/PathId'
+    get:
+      tags: [evaluation]
+      summary: 轮次指标快照
+      operationId: getRoundMetrics
+      responses:
+        '200': { $ref: '#/components/responses/OkObject' }
+
+  # ===========================================================================
+  # 4.3.8 统一任务
+  # ===========================================================================
+  /api/design/jobs:
+    get:
+      tags: [job]
+      summary: 任务列表
+      operationId: listJobs
+      parameters:
+        - name: projectId
+          in: query
+          schema: { type: integer, format: int64 }
+        - name: jobType
+          in: query
+          schema: { $ref: '#/components/schemas/JobType' }
+        - name: status
+          in: query
+          schema: { $ref: '#/components/schemas/JobStatus' }
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/PageSize'
+      responses:
+        '200': { $ref: '#/components/responses/PageOfJob' }
+
+  /api/design/jobs/{jobId}:
+    parameters:
+      - name: jobId
+        in: path
+        required: true
+        description: 数字 jobId 或字符串 jobNo（如 J260101120001A7F3）
+        schema: { type: string }
+    get:
+      tags: [job]
+      summary: 查询任务状态
+      operationId: getJob
+      responses:
+        '200': { $ref: '#/components/responses/JobStatusResponse' }
+        '404': { $ref: '#/components/responses/Error' }
+
+  /api/design/jobs/{jobId}/cancel:
+    parameters:
+      - name: jobId
+        in: path
+        required: true
+        schema: { type: string }
+    post:
+      tags: [job]
+      summary: 取消任务
+      operationId: cancelJob
+      responses:
+        '200': { $ref: '#/components/responses/OkVoid' }
+        '409': { $ref: '#/components/responses/Error' }
+
+  /api/design/stream/{jobNo}:
+    parameters:
+      - name: jobNo
+        in: path
+        required: true
+        schema: { type: string }
+      - name: since
+        in: query
+        description: 事件序号复位
+        schema: { type: string }
+    get:
+      tags: [job]
+      summary: SSE 增量推送（progress / candidate / metric / done）
+      description: |
+        断线重连请携带 Last-Event-ID。Redis 存 design:progress:{jobNo}（TTL 24h），DB 为权威。
+      operationId: streamJob
+      responses:
+        '200':
+          description: 事件流
+          content:
+            text/event-stream:
+              schema: { type: string }
+
+  # ===========================================================================
+  # 4.3.9 报告与审批
+  # ===========================================================================
+  /api/design/reports:
+    get:
+      tags: [report]
+      summary: 报告列表
+      operationId: listReports
+      parameters:
+        - name: projectId
+          in: query
+          schema: { type: integer, format: int64 }
+        - name: decision
+          in: query
+          schema: { $ref: '#/components/schemas/Decision' }
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/PageSize'
+      responses:
+        '200': { $ref: '#/components/responses/PageOfReport' }
+    post:
+      tags: [report]
+      summary: 生成报告（202）
+      operationId: createReport
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ReportCreateRequest' }
+      responses:
+        '202': { $ref: '#/components/responses/AcceptedReport' }
+
+  /api/design/reports/{id}:
+    parameters:
+      - $ref: '#/components/parameters/PathId'
+    get:
+      tags: [report]
+      summary: 报告详情（bodyJson + bodyMd）
+      operationId: getReport
+      responses:
+        '200': { $ref: '#/components/responses/Report' }
+        '404': { $ref: '#/components/responses/Error' }
+
+  /api/design/reports/{id}/decision:
+    parameters:
+      - $ref: '#/components/parameters/PathId'
+    patch:
+      tags: [report]
+      summary: 审批（APPROVED / REVISE / REJECTED）
+      description: REVISE / REJECTED 时 note 必填；同版本重复决策返回 REPORT_ALREADY_DECIDED。
+      operationId: decideReport
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ReportDecisionRequest' }
+      responses:
+        '200':
+          description: 审批成功（REVISE 时同事务插入修订版占位）
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Result'
+                  - properties:
+                      data: { $ref: '#/components/schemas/ReportDecisionResponse' }
+        '400': { $ref: '#/components/responses/Error' }
+        '409': { $ref: '#/components/responses/Error' }
+
+  /api/design/reports/{id}/export:
+    parameters:
+      - $ref: '#/components/parameters/PathId'
+    get:
+      tags: [report]
+      summary: 导出（markdown / json / pdf）
+      operationId: exportReport
+      parameters:
+        - name: format
+          in: query
+          schema: { type: string, enum: [markdown, json, pdf], default: markdown }
+      responses:
+        '200':
+          description: 文件流
+          content:
+            text/markdown: { schema: { type: string } }
+            application/json: { schema: { type: object } }
+            application/pdf: { schema: { type: string, format: binary } }
+
+  # ===========================================================================
+  # 4.3.10 湿实验
+  # ===========================================================================
+  /api/design/experiments:
+    get:
+      tags: [experiment]
+      summary: 实验台账
+      operationId: listExperiments
+      parameters:
+        - name: projectId
+          in: query
+          schema: { type: integer, format: int64 }
+        - name: assayType
+          in: query
+          schema: { type: string }
+        - name: resultStatus
+          in: query
+          schema: { $ref: '#/components/schemas/ExperimentStatus' }
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/PageSize'
+      responses:
+        '200': { $ref: '#/components/responses/PageOfExperiment' }
+    post:
+      tags: [experiment]
+      summary: 录入湿实验结果（同步，服务端算 errorDelta / isHit）
+      operationId: createExperiment
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ExperimentCreateRequest' }
+      responses:
+        '201':
+          description: 录入成功
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Result'
+                  - properties:
+                      data: { $ref: '#/components/schemas/Experiment' }
+        '400': { $ref: '#/components/responses/Error' }
+
+  /api/design/experiments/{id}:
+    parameters:
+      - $ref: '#/components/parameters/PathId'
+    get:
+      tags: [experiment]
+      summary: 详情（含预测-实测对比）
+      operationId: getExperiment
+      responses:
+        '200': { $ref: '#/components/responses/Experiment' }
+        '404': { $ref: '#/components/responses/Error' }
+    patch:
+      tags: [experiment]
+      summary: 补录/更正结果
+      operationId: patchExperiment
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ExperimentCreateRequest' }
+      responses:
+        '200': { $ref: '#/components/responses/Experiment' }
+
+  /api/design/experiments/import:
+    post:
+      tags: [experiment]
+      summary: 批量导入（CSV，202）
+      operationId: importExperiments
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              properties:
+                projectId: { type: integer, format: int64 }
+                roundId: { type: integer, format: int64 }
+                file: { type: string, format: binary }
+      responses:
+        '202': { $ref: '#/components/responses/Accepted' }
+
+  /api/design/experiments/feedback:
+    post:
+      tags: [experiment]
+      summary: 回灌校准（202，产出版本化校准工件）
+      description: 不直接改模型权重文件；产出 calibrationId，可回滚、可审计。
+      operationId: submitFeedback
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/FeedbackRequest' }
+      responses:
+        '202':
+          description: 受理（含 batchNo）
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Result'
+                  - properties:
+                      data: { $ref: '#/components/schemas/FeedbackAccepted' }
+        '400': { $ref: '#/components/responses/Error' }
+
+  /api/design/experiments/feedback/{batch}:
+    parameters:
+      - name: batch
+        in: path
+        required: true
+        schema: { type: string }
+    get:
+      tags: [experiment]
+      summary: 回灌批次状态与前后误差对比
+      operationId: getFeedbackBatch
+      responses:
+        '200': { $ref: '#/components/responses/OkObject' }
+
+  # ===========================================================================
+  # 4.3.11 工具与能力
+  # ===========================================================================
+  /api/design/tools:
+    get:
+      tags: [tool]
+      summary: 工具列表
+      operationId: listTools
+      parameters:
+        - name: category
+          in: query
+          schema: { type: string }
+        - name: enabled
+          in: query
+          schema: { type: boolean }
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/PageSize'
+      responses:
+        '200': { $ref: '#/components/responses/PageOfTool' }
+    post:
+      tags: [tool]
+      summary: 注册工具
+      description: realness 必填；available 不接受客户端传入（只能由 probe 回写）。
+      operationId: createTool
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ToolUpsert' }
+      responses:
+        '201': { $ref: '#/components/responses/Tool' }
+        '409': { $ref: '#/components/responses/Error' }
+
+  /api/design/tools/{id}:
+    parameters:
+      - $ref: '#/components/parameters/PathId'
+    get:
+      tags: [tool]
+      summary: 工具详情
+      operationId: getTool
+      responses:
+        '200': { $ref: '#/components/responses/Tool' }
+        '404': { $ref: '#/components/responses/Error' }
+    patch:
+      tags: [tool]
+      summary: 更新（启用/禁用/暴露给智能体）
+      operationId: patchTool
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ToolUpsert' }
+      responses:
+        '200': { $ref: '#/components/responses/Tool' }
+
+  /api/design/tools/{id}/probe:
+    parameters:
+      - $ref: '#/components/parameters/PathId'
+    post:
+      tags: [tool]
+      summary: 能力探测（回写 available / probe_msg）
+      operationId: probeTool
+      responses:
+        '200': { $ref: '#/components/responses/Tool' }
+        '502': { $ref: '#/components/responses/Error' }
+
+  /api/design/capabilities:
+    get:
+      tags: [tool]
+      summary: 当前能力矩阵（前端能力状态灯）
+      operationId: getCapabilities
+      responses:
+        '200': { $ref: '#/components/responses/Capabilities' }
+
+  # ===========================================================================
+  # 4.3.12 工作站
+  # ===========================================================================
+  /api/design/workspace:
+    get:
+      tags: [workspace]
+      summary: 工作台视图状态（IDE 恢复）
+      operationId: getWorkspace
+      parameters:
+        - name: projectId
+          in: query
+          schema: { type: integer, format: int64 }
+      responses:
+        '200': { $ref: '#/components/responses/OkObject' }
+    put:
+      tags: [workspace]
+      summary: 保存工作台视图状态
+      operationId: saveWorkspace
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/WorkspaceStateUpsert' }
+      responses:
+        '200': { $ref: '#/components/responses/OkVoid' }
+
+  /api/design/commands:
+    get:
+      tags: [workspace]
+      summary: 命令注册表（写操作唯一入口，按能力置灰）
+      operationId: listCommands
+      responses:
+        '200': { $ref: '#/components/responses/OkObject' }
+
+  /api/design/compare/candidates:
+    post:
+      tags: [workspace]
+      summary: 候选对比（MCS / 描述符差异，服务端计算 —— 红线 R3）
+      operationId: compareCandidates
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [candidateIds]
+              properties:
+                candidateIds:
+                  type: array
+                  minItems: 2
+                  items: { type: integer, format: int64 }
+                includeMcs: { type: boolean, default: true }
+      responses:
+        '200': { $ref: '#/components/responses/OkObject' }
+        '400': { $ref: '#/components/responses/Error' }
+
+  /api/design/compare/runs:
+    post:
+      tags: [workspace]
+      summary: 轮次对比
+      operationId: compareRuns
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                runIds:
+                  type: array
+                  items: { type: integer, format: int64 }
+      responses:
+        '200': { $ref: '#/components/responses/OkObject' }
+
+  # ===========================================================================
+  # 4.3.13 文件
+  # ===========================================================================
+  /api/design/files:
+    post:
+      tags: [file]
+      summary: 上传文件（SHA256 内容寻址去重，命中即复用）
+      operationId: uploadFile
+      requestBody:
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              properties:
+                file: { type: string, format: binary }
+      responses:
+        '201': { $ref: '#/components/responses/OkObject' }
+
+  /api/design/files/{id}:
+    parameters:
+      - $ref: '#/components/parameters/PathId'
+    get:
+      tags: [file]
+      summary: 下载/获取预签名 URL
+      operationId: getFile
+      parameters:
+        - name: presign
+          in: query
+          schema: { type: boolean, default: false }
+      responses:
+        '200': { $ref: '#/components/responses/OkObject' }
+        '404': { $ref: '#/components/responses/Error' }
+
+  /api/design/files/{id}/refs:
+    parameters:
+      - $ref: '#/components/parameters/PathId'
+    get:
+      tags: [file]
+      summary: 引用计数与引用方列表
+      operationId: getFileRefs
+      responses:
+        '200': { $ref: '#/components/responses/OkObject' }
+
+# =============================================================================
+# components
+# =============================================================================
+components:
+
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+    apiKey:
+      type: apiKey
+      in: header
+      name: X-API-Key
+      description: 仅用于服务间调用（/v1/**）
+
+  parameters:
+    PathId:
+      name: id
+      in: path
+      required: true
+      schema: { type: integer, format: int64 }
+    Page:
+      name: page
+      in: query
+      schema: { type: integer, minimum: 1, default: 1 }
+    PageSize:
+      name: pageSize
+      in: query
+      schema: { type: integer, minimum: 1, maximum: 200, default: 20 }
+    Keyword:
+      name: keyword
+      in: query
+      schema: { type: string, maxLength: 100 }
+    Category:
+      name: category
+      in: query
+      schema: { $ref: '#/components/schemas/LibraryCategory' }
+    ParentId:
+      name: parentId
+      in: query
+      schema: { type: integer, format: int64 }
+    SortBy:
+      name: sortBy
+      in: query
+      description: 白名单字段；禁止把用户输入拼进 ORDER BY
+      schema: { type: string }
+    Order:
+      name: order
+      in: query
+      schema: { type: string, enum: [asc, desc], default: desc }
+    IdempotencyKey:
+      name: Idempotency-Key
+      in: header
+      description: 命中 uk_idempotent_key 且任务未终态时返回既有 job
+      schema: { type: string, maxLength: 120 }
+
+  schemas:
+
+    # ---------------------------------------------------------------- 封装
+    Result:
+      type: object
+      required: [code, message]
+      properties:
+        code: { type: integer, description: 0=成功；4xxxx/5xxxx=错误 }
+        errorCode: { type: string, nullable: true, example: DESIGN_PROJECT_NOT_FOUND }
+        message: { type: string }
+        data: { nullable: true }
+
+    PageMeta:
+      type: object
+      required: [list, total, page, pageSize, hasNext]
+      properties:
+        list: { type: array, items: {} }
+        total: { type: integer, format: int64 }
+        page: { type: integer }
+        pageSize: { type: integer }
+        hasNext: { type: boolean }
+
+    ErrorDetail:
+      type: object
+      properties:
+        details:
+          type: object
+          description: 附加细节，如 existingId / readyBlockers / fieldErrors
+          additionalProperties: true
+
+    JobAccepted:
+      type: object
+      required: [jobId, jobNo, status]
+      properties:
+        jobId: { type: integer, format: int64 }
+        jobNo: { type: string, example: J260101120001A7F3 }
+        status: { $ref: '#/components/schemas/JobStatus' }
+        reused: { type: boolean, description: 幂等命中既有任务时为 true }
+
+    # ---------------------------------------------------------------- 枚举
+    ProjectStatus: { type: string, enum: [DRAFT, READY, ACTIVE, COMPLETED, CANCELLED, ARCHIVED] }
+    RoundStatus: { type: string, enum: [PLANNED, GENERATING, EDITING, EVALUATING, REVIEWING, CLOSED] }
+    JobStatus: { type: string, enum: [PENDING, RUNNING, SUCCEEDED, PARTIAL, FAILED, CANCELLED] }
+    JobType:
+      type: string
+      enum: [GENERATION, EVALUATION, POCKET_DETECT, STRUCTURE_FETCH, REPORT, FEEDBACK_CALIBRATE, EXPORT]
+    ModalityCode:
+      type: string
+      enum: [SMALL_MOLECULE, ANTIBODY, PEPTIDE, BISPECIFIC, ADC, FUSION_PROTEIN]
+    ReviewStatus: { type: string, enum: [NEW, QUALIFIED, REJECTED, TOP, SELECTED] }
+    Realness: { type: string, enum: [REAL, SEMI_REAL, HEURISTIC, SIMULATED] }
+    RiskLevel: { type: string, enum: [LOW, MEDIUM, HIGH, CRITICAL] }
+    Decision: { type: string, enum: [PENDING, APPROVED, REVISE, REJECTED] }
+    ExperimentStatus: { type: string, enum: [PLANNED, RUNNING, SUCCEEDED, FAILED, INCONCLUSIVE] }
+    TargetRole: { type: string, enum: [WILD_TYPE, MUTANT, ANTI_TARGET, OFF_TARGET] }
+    NumericOperator: { type: string, enum: [GT, GTE, LT, LTE, EQ, BETWEEN] }
+    EvalDimension:
+      type: string
+      enum: [AFFINITY, STABILITY, EXPRESSION, ADMET, SYNTHESIZABILITY, DEVELOPABILITY, SELECTIVITY, IMMUNOGENICITY]
+    LibraryCategory:
+      type: string
+      enum: [DISEASE, TARGET, MODALITY, CONSTRAINT_TEMPLATE, OBJECTIVE, ASSAY]
+
+    # ---------------------------------------------------------------- 知识库
+    LibraryItem:
+      type: object
+      properties:
+        id: { type: integer, format: int64 }
+        category: { $ref: '#/components/schemas/LibraryCategory' }
+        code: { type: string }
+        name: { type: string }
+        nameEn: { type: string, nullable: true }
+        parentId: { type: integer, format: int64, nullable: true }
+        levelNo: { type: integer }
+        path: { type: string, example: /DISEASE/ONCOLOGY/NSCLC }
+        meta: { type: object, additionalProperties: true, nullable: true }
+        enabled: { type: boolean }
+        builtin: { type: boolean }
+        sortNo: { type: integer }
+        remark: { type: string, nullable: true, description: 阶段 2B 补充：PATCH 可改 remark，不给读回等于写入即丢失 }
+
+    LibraryItemNode:
+      allOf:
+        - $ref: '#/components/schemas/LibraryItem'
+        - type: object
+          properties:
+            children:
+              type: array
+              items: { $ref: '#/components/schemas/LibraryItemNode' }
+
+    LibraryItemUpsert:
+      type: object
+      required: [category, code, name]
+      properties:
+        category: { $ref: '#/components/schemas/LibraryCategory' }
+        code: { type: string, maxLength: 64 }
+        name: { type: string, maxLength: 200 }
+        nameEn: { type: string, maxLength: 200 }
+        parentId: { type: integer, format: int64, nullable: true }
+        metaJson: { type: object, additionalProperties: true }
+        sortNo: { type: integer }
+        enabled: { type: boolean, default: true }
+        remark: { type: string, maxLength: 500 }
+
+    # ---------------------------------------------------------------- 项目
+    Project:
+      type: object
+      properties:
+        id: { type: integer, format: int64 }
+        projectNo: { type: string, example: P2601011A2B3 }
+        name: { type: string }
+        goalText: { type: string, nullable: true }
+        goalMetric: { type: object, additionalProperties: true, nullable: true }
+        diseaseId: { type: integer, format: int64, nullable: true }
+        modalityId: { type: integer, format: int64, nullable: true }
+        activeConstraintSetId: { type: integer, format: int64, nullable: true }
+        currentRoundId: { type: integer, format: int64, nullable: true }
+        status: { $ref: '#/components/schemas/ProjectStatus' }
+        summary: { type: string, nullable: true }
+        startedAt: { type: string, format: date-time, nullable: true }
+        closedAt: { type: string, format: date-time, nullable: true }
+        createdAt: { type: string, format: date-time }
+        targets:
+          type: array
+          items: { $ref: '#/components/schemas/ProjectTarget' }
+        rounds:
+          type: array
+          items: { $ref: '#/components/schemas/Round' }
+        candidateStats:
+          type: object
+          properties:
+            total: { type: integer }
+            qualified: { type: integer }
+            top: { type: integer }
+          nullable: true
+
+    ProjectCreatedResponse:
+      type: object
+      properties:
+        id: { type: integer, format: int64 }
+        projectNo: { type: string }
+        status: { $ref: '#/components/schemas/ProjectStatus' }
+        readyBlockers:
+          type: array
+          description: 进入 READY 还缺什么（红线 R2：不得静默就绪）
+          items: { type: string }
+          example: [尚未激活约束集]
+
+    ProjectCreateRequest:
+      type: object
+      required: [name, modalityId, targets]
+      properties:
+        name: { type: string, maxLength: 200 }
+        goalText: { type: string }
+        diseaseId: { type: integer, format: int64 }
+        modalityId: { type: integer, format: int64 }
+        targets:
+          type: array
+          minItems: 1
+          description: 必须恰好一个 isPrimary=true（uk_primary_target）
+          items: { $ref: '#/components/schemas/ProjectTargetBindRequest' }
+        objectives:
+          type: array
+          items: { $ref: '#/components/schemas/Objective' }
+        constraintRules:
+          type: array
+          items: { $ref: '#/components/schemas/ConstraintRule' }
+
+    ProjectPatchRequest:
+      type: object
+      properties:
+        name: { type: string }
+        goalText: { type: string }
+        diseaseId: { type: integer, format: int64 }
+        modalityId: { type: integer, format: int64 }
+        version: { type: integer, description: 乐观锁；冲突返回 STALE_OBJECT }
+
+    ProjectTarget:
+      type: object
+      properties:
+        id: { type: integer, format: int64 }
+        targetId: { type: integer, format: int64 }
+        targetName: { type: string, nullable: true }
+        isPrimary: { type: boolean }
+        role: { $ref: '#/components/schemas/TargetRole' }
+        sortNo: { type: integer }
+
+    ProjectTargetBindRequest:
+      type: object
+      required: [targetId]
+      properties:
+        targetId: { type: integer, format: int64 }
+        role: { $ref: '#/components/schemas/TargetRole' }
+        isPrimary: { type: boolean, default: false }
+
+    Objective:
+      type: object
+      required: [dimension, operator, threshold]
+      properties:
+        dimension: { $ref: '#/components/schemas/EvalDimension' }
+        operator: { $ref: '#/components/schemas/NumericOperator' }
+        threshold: { type: number, format: double }
+        thresholdMax: { type: number, format: double, nullable: true }
+        unit: { type: string, nullable: true }
+        weight: { type: number, format: double, minimum: 0, maximum: 1 }
+
+    Round:
+      type: object
+      properties:
+        id: { type: integer, format: int64 }
+        projectId: { type: integer, format: int64 }
+        roundNo: { type: integer }
+        strategyNote: { type: string, nullable: true }
+        status: { $ref: '#/components/schemas/RoundStatus' }
+        conclusionText: { type: string, nullable: true }
+        metrics: { type: object, additionalProperties: true, nullable: true }
+        openedAt: { type: string, format: date-time }
+        closedAt: { type: string, format: date-time, nullable: true }
+
+    RoundOpenRequest:
+      type: object
+      properties:
+        strategyNote: { type: string }
+
+    NextRoundRequest:
+      type: object
+      properties:
+        strategyNote: { type: string }
+        seedFrom: { type: string, enum: [EXPERIMENT_BEST, TOP_CANDIDATE, MANUAL] }
+        calibrationId: { type: string, nullable: true }
+        autoStartGeneration: { type: boolean, default: false }
+        generation: { $ref: '#/components/schemas/GenerationJobRequest' }
+
+    AcceptedNextRound:
+      allOf:
+        - $ref: '#/components/schemas/Result'
+        - type: object
+          properties:
+            data:
+              type: object
+              properties:
+                roundId: { type: integer, format: int64 }
+                roundNo: { type: integer }
+                jobId: { type: integer, format: int64, nullable: true }
+                status: { $ref: '#/components/schemas/JobStatus' }
+
+    # ---------------------------------------------------------------- 靶点
+    Target:
+      type: object
+      properties:
+        id: { type: integer, format: int64 }
+        uniprotId: { type: string, example: P00533 }
+        name: { type: string, example: EGFR }
+        chineseName: { type: string, nullable: true }
+        geneName: { type: string, nullable: true }
+        organism: { type: string }
+        targetType: { type: string, nullable: true }
+        family: { type: string, nullable: true }
+        diseaseArea: { type: string, nullable: true }
+        description:
+          type: string
+          nullable: true
+          description: 功能描述。勘误 E-01（v1.8.0 补登记）：前端 `Target` 接口与 `测试数据准备清单.md` §2.A 都要求该字段
+        pathway:
+          type: string
+          nullable: true
+          description: 主要通路。勘误 E-01（v1.8.0 补登记）
+        relatedDiseases:
+          type: string
+          nullable: true
+          description: 相关疾病。勘误 E-01（v1.8.0 补登记）
+        knownDrugs:
+          type: string
+          nullable: true
+          description: 已知药物/干预方式。勘误 E-01（v1.8.0 补登记）
+        sequence: { type: string, nullable: true, description: DTI 预测必需；缺失则 TARGET_SEQUENCE_REQUIRED }
+        sequenceLength: { type: integer, nullable: true }
+        pdbIds: { type: string, nullable: true }
+        status: { type: string, enum: [supported, beta, planned] }
+        structures:
+          type: array
+          items: { $ref: '#/components/schemas/TargetStructure' }
+
+    TargetStructure:
+      type: object
+      properties:
+        id: { type: integer, format: int64 }
+        targetId: { type: integer, format: int64 }
+        pdbId: { type: string, nullable: true }
+        chainId: { type: string, nullable: true }
+        source: { type: string, enum: [PDB, ALPHAFOLD, USER_UPLOAD] }
+        sourceKey: { type: string, description: 'PDB=1M17:A / AF=P00533:v4 / UPLOAD=sha256 前 16 位' }
+        experimentMethod: { type: string, nullable: true }
+        resolution: { type: number, nullable: true }
+        ligandCount: { type: integer }
+        pocketCount: { type: integer }
+        isPreferred: { type: boolean }
+        fileAssetId: { type: integer, format: int64, nullable: true }
+        pockets:
+          type: array
+          items: { $ref: '#/components/schemas/BindingPocket' }
+
+    BindingPocket:
+      type: object
+      properties:
+        id: { type: integer, format: int64 }
+        structureId: { type: integer, format: int64 }
+        pocketNo: { type: integer }
+        method: { type: string, enum: [P2RANK, FPOCKET, LIGAND_BASED, MANUAL] }
+        score: { type: number, nullable: true }
+        druggability: { type: number, nullable: true }
+        volume: { type: number, nullable: true }
+        centerX: { type: number }
+        centerY: { type: number }
+        centerZ: { type: number }
+        residues: { type: array, items: { type: object, additionalProperties: true } }
+        isSelected: { type: boolean }
+        note: { type: string, nullable: true }
+
+    PocketCreateRequest:
+      type: object
+      required: [centerX, centerY, centerZ]
+      properties:
+        pocketNo: { type: integer }
+        centerX: { type: number }
+        centerY: { type: number }
+        centerZ: { type: number }
+        volume: { type: number }
+        note: { type: string }
+
+    # ---------------------------------------------------------------- 约束
+    ConstraintSet:
+      type: object
+      properties:
+        id: { type: integer, format: int64 }
+        setId: { type: integer, format: int64 }
+        name: { type: string }
+        description: { type: string, nullable: true }
+        logic: { type: string, enum: [AND] }
+        status: { type: string, enum: [DRAFT, ACTIVE, ARCHIVED] }
+        version: { type: integer }
+        parentId: { type: integer, format: int64, nullable: true }
+        rules:
+          type: array
+          items: { $ref: '#/components/schemas/ConstraintRule' }
+
+    ConstraintSetUpsert:
+      type: object
+      required: [name]
+      properties:
+        name: { type: string }
+        description: { type: string }
+        rules:
+          type: array
+          items: { $ref: '#/components/schemas/ConstraintRule' }
+        version: { type: integer }
+
+    ConstraintRule:
+      type: object
+      required: [ruleType, severity, params]
+      properties:
+        id: { type: integer, format: int64 }
+        groupKey: { type: string, default: G1 }
+        groupLogic: { type: string, enum: [AND, OR], default: AND }
+        ruleType:
+          type: string
+          enum:
+            - NUMERIC_RANGE
+            - SMARTS_REQUIRED
+            - SMARTS_FORBIDDEN
+            - SCAFFOLD_REQUIRED
+            - SCAFFOLD_FORBIDDEN
+            - FILTER_CATALOG
+            - SIMILARITY_RANGE
+            - SIMILARITY_TO_SET
+            - RING_COUNT
+            - SUBSTITUENT_ALLOWED
+            - RULE_SET
+        severity: { type: string, enum: [HARD, SOFT] }
+        weight: { type: integer, description: SOFT 规则的扣分权重 }
+        params: { type: object, additionalProperties: true }
+        dimension: { $ref: '#/components/schemas/EvalDimension' }
+        operator: { $ref: '#/components/schemas/NumericOperator' }
+        thresholdNum: { type: number, nullable: true }
+        thresholdMax: { type: number, nullable: true }
+        unit: { type: string, nullable: true }
+        humanReadable: { type: string, description: 必填展示，红线 R2：不做隐藏规则 }
+        sortNo: { type: integer }
+        enabled: { type: boolean, default: true }
+
+    # ---------------------------------------------------------------- 生成/候选
+    GenerationJobRequest:
+      type: object
+      required: [roundId, strategies]
+      properties:
+        roundId: { type: integer, format: int64 }
+        strategies:
+          type: array
+          minItems: 1
+          items: { type: string, example: R_GROUP }
+        strategyParams: { type: object, additionalProperties: true }
+        targetCount: { type: integer, minimum: 1, maximum: 10000, default: 100 }
+        seed:
+          type: object
+          properties:
+            type: { type: string, enum: [POCKET_LIGAND, SMILES, MOLECULE_ID, NONE] }
+            pocketId: { type: integer, format: int64, nullable: true }
+            smiles: { type: string, nullable: true }
+            moleculeId: { type: integer, format: int64, nullable: true }
+        idempotencyKey: { type: string, maxLength: 120 }
+
+    Candidate:
+      type: object
+      properties:
+        id: { type: integer, format: int64 }
+        projectId: { type: integer, format: int64 }
+        roundId: { type: integer, format: int64, nullable: true }
+        moleculeName: { type: string, nullable: true }
+        modalityCode: { $ref: '#/components/schemas/ModalityCode' }
+        smiles: { type: string, nullable: true, description: 生物大分子为 null }
+        inchikey: { type: string, nullable: true }
+        canonicalSmiles: { type: string, nullable: true }
+        sequence: { type: string, nullable: true }
+        sequenceLength: { type: integer, nullable: true }
+        originType: { type: string, enum: [GENERATED, EDITED, IMPORTED, SEED] }
+        strategyName: { type: string, nullable: true }
+        parentMolId: { type: integer, format: int64, nullable: true }
+        lineageDepth: { type: integer, description: 实时计算的版本深度（不落库） }
+        generationParams: { type: object, additionalProperties: true, nullable: true }
+        mw: { type: number, nullable: true }
+        logp: { type: number, nullable: true }
+        saScore: { type: number, nullable: true }
+        qed: { type: number, nullable: true }
+        totalScore: { type: number, nullable: true }
+        hardPassed: { type: boolean }
+        reviewStatus: { $ref: '#/components/schemas/ReviewStatus' }
+        batchTag: { type: string, nullable: true }
+        note: { type: string, nullable: true }
+        createdAt: { type: string, format: date-time }
+
+    # ---------------------------------------------------------------- 编辑
+    MoleculeEditRequest:
+      type: object
+      required: [strategyCode, editType, params]
+      properties:
+        strategyCode:
+          type: string
+          enum: [SIDE_CHAIN, SCAFFOLD_HOP, MUTATION, LINKER, INTERFACE_REDESIGN, HUMANIZATION, GLYCO_OPT]
+        editType:
+          type: string
+          enum:
+            - ADD_SUBSTITUENT
+            - REMOVE_SUBSTITUENT
+            - REPLACE_GROUP
+            - RING_OPEN_CLOSE
+            - CHAIN_EXTEND
+            - HETERO_SWAP
+            - STEREO_TUNE
+            - RAW_SMILES
+            - FRAGMENT_JOIN
+        targetRegion: { type: string, example: 'C12 / CDR-H3 / 界面残基 745' }
+        params: { type: object, additionalProperties: true }
+        previewOnly: { type: boolean, default: false, description: true 时不落库 }
+        evaluateInline: { type: boolean, default: true, description: 同步快评（目标 < 1.5s） }
+
+    MoleculeEditResponse:
+      type: object
+      properties:
+        candidateId: { type: integer, format: int64 }
+        parentMolId: { type: integer, format: int64 }
+        modalityCode: { $ref: '#/components/schemas/ModalityCode' }
+        smiles: { type: string, nullable: true }
+        sequence: { type: string, nullable: true }
+        inchikey: { type: string, nullable: true }
+        describe: { type: string, example: 在 12 位碳上添加羟基 }
+        changedAtoms: { type: array, items: { type: integer } }
+        totalScore: { type: number, nullable: true }
+        reviewStatus: { $ref: '#/components/schemas/ReviewStatus' }
+        metrics:
+          type: array
+          items: { $ref: '#/components/schemas/MetricValue' }
+        constraintRag:
+          type: array
+          items: { $ref: '#/components/schemas/ConstraintRag' }
+
+    MetricValue:
+      type: object
+      properties:
+        metricCode: { type: string }
+        metricName: { type: string, nullable: true }
+        valueNum: { type: number, nullable: true }
+        valueText: { type: string, nullable: true }
+        normalized: { type: number, nullable: true }
+        grade: { type: string, nullable: true }
+        riskLevel: { $ref: '#/components/schemas/RiskLevel' }
+        realness: { $ref: '#/components/schemas/Realness' }
+        sourceToolCode: { type: string, nullable: true }
+        success: { type: boolean, description: 模型静默兜底 / 引擎不可用必须为 false }
+        errorMsg: { type: string, nullable: true }
+
+    ConstraintRag:
+      type: object
+      properties:
+        ruleId: { type: integer, format: int64 }
+        humanReadable: { type: string }
+        severity: { type: string, enum: [HARD, SOFT] }
+        passed: { type: boolean }
+        detail: { type: string, nullable: true }
+
+    # ---------------------------------------------------------------- 评估
+    EvaluationJobRequest:
+      type: object
+      required: [projectId, metrics]
+      properties:
+        projectId: { type: integer, format: int64 }
+        roundId: { type: integer, format: int64 }
+        scope: { type: string, enum: [ALL, SELECTED, INCREMENTAL], default: SELECTED }
+        candidateIds:
+          type: array
+          items: { type: integer, format: int64 }
+          description: scope=SELECTED 时必填
+        metrics:
+          type: array
+          minItems: 1
+          items: { type: string }
+        metricWeights:
+          type: object
+          additionalProperties: { type: number }
+          description: 缺省时用 metric_definition.weight；两种情况都写入 evaluation_run.metric_weights 快照
+        targetRoleScope:
+          type: array
+          items: { $ref: '#/components/schemas/TargetRole' }
+
+    LeaderboardResponse:
+      type: object
+      properties:
+        metricColumns:
+          type: array
+          items:
+            type: object
+            properties:
+              metricCode: { type: string }
+              name: { type: string }
+              unit: { type: string, nullable: true }
+              better: { type: string, enum: [HIGHER, LOWER, NONE] }
+              weight: { type: number }
+        list:
+          type: array
+          items:
+            type: object
+            properties:
+              candidateId: { type: integer, format: int64 }
+              moleculeName: { type: string, nullable: true }
+              modalityCode: { $ref: '#/components/schemas/ModalityCode' }
+              totalScore: { type: number, nullable: true }
+              reviewStatus: { $ref: '#/components/schemas/ReviewStatus' }
+              realness: { $ref: '#/components/schemas/Realness' }
+              riskLevel: { $ref: '#/components/schemas/RiskLevel' }
+              metrics: { type: object, additionalProperties: { type: number, nullable: true } }
+              unavailableMetrics: { type: array, items: { type: string } }
+        weightsSnapshot:
+          type: object
+          additionalProperties: { type: number }
+          description: 本次排序所用权重（与 evaluation_run 一致，保证可复现）
+        redistributed:
+          type: array
+          description: 未参与计算的指标 + 原因 + 权重去向（红线 R1）
+          items:
+            type: object
+            properties:
+              metricCode: { type: string }
+              reason: { type: string, example: vina 未安装 }
+              redistributedWeight: { type: number }
+        total: { type: integer }
+        page: { type: integer }
+        pageSize: { type: integer }
+        hasNext: { type: boolean }
+
+    # ---------------------------------------------------------------- 任务
+    JobStatusResponse:
+      type: object
+      properties:
+        jobId: { type: integer, format: int64 }
+        jobNo: { type: string }
+        jobType: { $ref: '#/components/schemas/JobType' }
+        status: { $ref: '#/components/schemas/JobStatus' }
+        progress: { type: number }
+        totalCount: { type: integer }
+        doneCount: { type: integer }
+        bizType: { type: string, nullable: true }
+        bizId: { type: integer, format: int64, nullable: true }
+        toolId: { type: integer, format: int64, nullable: true }
+        toolCode: { type: string, nullable: true }
+        realness: { $ref: '#/components/schemas/Realness' }
+        result: { type: object, additionalProperties: true, nullable: true }
+        errorCode: { type: string, nullable: true }
+        errorMsg: { type: string, nullable: true }
+        startedAt: { type: string, format: date-time, nullable: true }
+        completedAt: { type: string, format: date-time, nullable: true }
+
+    # ---------------------------------------------------------------- 报告
+    ReportCreateRequest:
+      type: object
+      required: [projectId, reportType]
+      properties:
+        projectId: { type: integer, format: int64 }
+        roundId: { type: integer, format: int64 }
+        evaluationRunId: { type: integer, format: int64 }
+        reportType: { type: string, enum: [TOP_N, ROUND_SUMMARY, ADHOC] }
+        topN: { type: integer, default: 10 }
+        includeLineage: { type: boolean, default: true }
+        includeExperimentAccuracy: { type: boolean, default: true }
+
+    AcceptedReport:
+      allOf:
+        - $ref: '#/components/schemas/Result'
+        - type: object
+          properties:
+            data:
+              type: object
+              properties:
+                reportId: { type: integer, format: int64 }
+                jobId: { type: integer, format: int64 }
+                status: { type: string }
+
+    Report:
+      type: object
+      properties:
+        id: { type: integer, format: int64 }
+        reportNo: { type: string }
+        projectId: { type: integer, format: int64 }
+        roundId: { type: integer, format: int64, nullable: true }
+        evaluationRunId: { type: integer, format: int64, nullable: true }
+        title: { type: string }
+        reportType: { type: string, enum: [TOP_N, ROUND_SUMMARY, ADHOC] }
+        topN: { type: integer }
+        bodyJson: { type: object, additionalProperties: true, nullable: true }
+        bodyMd: { type: string, nullable: true }
+        capabilityNote:
+          type: string
+          nullable: true
+          description: 生成时的能力边界声明（哪些引擎不可用、realness 分布）—— 红色 R1/R2 要求
+        decision: { $ref: '#/components/schemas/Decision' }
+        decisionBy: { type: integer, format: int64, nullable: true }
+        decisionAt: { type: string, format: date-time, nullable: true }
+        decisionNote: { type: string, nullable: true }
+        revisionOf: { type: integer, format: int64, nullable: true }
+        versionNo: { type: integer }
+        status: { type: string, enum: [PENDING, GENERATING, SUCCEEDED, PARTIAL, FAILED] }
+        jobId: { type: integer, format: int64, nullable: true }
+        createdAt: { type: string, format: date-time }
+
+    ReportDecisionRequest:
+      type: object
+      required: [decision]
+      properties:
+        decision: { type: string, enum: [APPROVED, REVISE, REJECTED] }
+        note: { type: string, description: REVISE / REJECTED 必填 }
+        version: { type: integer, description: 乐观锁 }
+
+    ReportDecisionResponse:
+      type: object
+      properties:
+        reportId: { type: integer, format: int64 }
+        decision: { $ref: '#/components/schemas/Decision' }
+        decisionBy: { type: integer, format: int64 }
+        decisionAt: { type: string, format: date-time }
+        revision:
+          type: object
+          nullable: true
+          properties:
+            reportId: { type: integer, format: int64 }
+            reportNo: { type: string }
+            versionNo: { type: integer }
+            status: { type: string }
+
+    # ---------------------------------------------------------------- 湿实验
+    ExperimentCreateRequest:
+      type: object
+      required: [projectId, assayType, resultStatus]
+      properties:
+        projectId: { type: integer, format: int64 }
+        roundId: { type: integer, format: int64 }
+        candidateId: { type: integer, format: int64 }
+        reportId: { type: integer, format: int64 }
+        assayType: { type: string, example: IC50 }
+        targetRole: { $ref: '#/components/schemas/TargetRole' }
+        assayProtocol: { type: string }
+        resultStatus: { $ref: '#/components/schemas/ExperimentStatus' }
+        resultNum: { type: number, nullable: true }
+        resultText: { type: string, nullable: true }
+        unit: { type: string, nullable: true }
+        operator: { $ref: '#/components/schemas/NumericOperator' }
+        predictedValue: { type: number, nullable: true }
+        predictedMetric: { type: string, nullable: true }
+        labName: { type: string, nullable: true }
+        dataAssetId: { type: integer, format: int64, nullable: true }
+
+    Experiment:
+      type: object
+      properties:
+        id: { type: integer, format: int64 }
+        experimentNo: { type: string, example: W260103143001C9 }
+        projectId: { type: integer, format: int64 }
+        candidateId: { type: integer, format: int64, nullable: true }
+        assayType: { type: string }
+        targetRole: { $ref: '#/components/schemas/TargetRole' }
+        resultStatus: { $ref: '#/components/schemas/ExperimentStatus' }
+        resultNum: { type: number, nullable: true }
+        unit: { type: string, nullable: true }
+        predictedValue: { type: number, nullable: true }
+        predictedMetric: { type: string, nullable: true }
+        errorDelta:
+          type: number
+          nullable: true
+          description: 服务端计算 = resultNum - predictedValue（不接受客户端传入）
+        isHit: { type: boolean, nullable: true }
+        feedbackToModel: { type: boolean }
+        feedbackBatch: { type: string, nullable: true }
+        calibrationId: { type: string, nullable: true }
+        createdAt: { type: string, format: date-time }
+
+    FeedbackRequest:
+      type: object
+      required: [projectId, experimentIds, mode]
+      properties:
+        projectId: { type: integer, format: int64 }
+        experimentIds:
+          type: array
+          minItems: 1
+          items: { type: integer, format: int64 }
+        mode:
+          type: string
+          enum: [RESIDUAL_FIT, ISOTONIC, PLATT, TEMPERATURE]
+          description: 校准算法；协议见 04-计算层契约与校准协议.md §4
+        note: { type: string }
+
+    FeedbackAccepted:
+      type: object
+      properties:
+        jobId: { type: integer, format: int64 }
+        status: { $ref: '#/components/schemas/JobStatus' }
+        batchNo: { type: string, example: B260103143500D2 }
+
+    ExperimentAccuracy:
+      type: object
+      properties:
+        byAssay:
+          type: array
+          items:
+            type: object
+            properties:
+              assayType: { type: string }
+              targetRole: { $ref: '#/components/schemas/TargetRole' }
+              sampleN: { type: integer }
+              mae: { type: number, nullable: true }
+              hitRate: { type: number, nullable: true }
+              r2: { type: number, nullable: true }
+              lastUpdatedAt: { type: string, format: date-time, nullable: true }
+        overall:
+          type: object
+          properties:
+            sampleN: { type: integer }
+            mae: { type: number, nullable: true }
+            hitRate: { type: number, nullable: true }
+        note:
+          type: string
+          description: sampleN < 30 必须提示统计置信度有限；sampleN = 0 写"未验证"
+
+    # ---------------------------------------------------------------- 工具
+    Tool:
+      type: object
+      properties:
+        id: { type: integer, format: int64 }
+        toolCode: { type: string, example: predict_dti }
+        name: { type: string }
+        description: { type: string, nullable: true }
+        category: { type: string, enum: [PREDICTION, GENERATION, EDIT, EVALUATION, STRUCTURE, RETRIEVAL, REPORT] }
+        type: { type: string, enum: [HTTP, INTERNAL, LLM] }
+        provider: { type: string, enum: [FASTAPI, SPRINGBOOT, EXTERNAL] }
+        endpoint: { type: string, nullable: true }
+        httpMethod: { type: string }
+        inputSchema: { type: object, additionalProperties: true, nullable: true }
+        outputSchema: { type: object, additionalProperties: true, nullable: true }
+        asyncExecution: { type: boolean }
+        timeoutMs: { type: integer }
+        requiresEngine: { type: string, nullable: true }
+        capabilityKey: { type: string, nullable: true }
+        realness: { $ref: '#/components/schemas/Realness' }
+        enabled: { type: boolean }
+        available:
+          type: boolean
+          description: 能力事实（权威）。只能由 POST /tools/{id}/probe 回写，不接受客户端传入
+        probeMsg:
+          type: string
+          nullable: true
+          description: 探测失败原因，UI 直接展示（红线 R2：不得"点了才失败"）
+        lastProbeAt: { type: string, format: date-time, nullable: true }
+        agentExposed: { type: boolean }
+        agentToolName: { type: string, nullable: true }
+        version: { type: string, nullable: true }
+
+    ToolUpsert:
+      type: object
+      required: [toolCode, name, category, realness]
+      properties:
+        toolCode: { type: string, maxLength: 64 }
+        name: { type: string, maxLength: 200 }
+        description: { type: string, maxLength: 500 }
+        category: { type: string, enum: [PREDICTION, GENERATION, EDIT, EVALUATION, STRUCTURE, RETRIEVAL, REPORT] }
+        type: { type: string, enum: [HTTP, INTERNAL, LLM], default: HTTP }
+        provider: { type: string, enum: [FASTAPI, SPRINGBOOT, EXTERNAL], default: FASTAPI }
+        endpoint: { type: string, maxLength: 500 }
+        httpMethod: { type: string, default: POST }
+        inputSchema: { type: object, additionalProperties: true }
+        outputSchema: { type: object, additionalProperties: true }
+        asyncExecution: { type: boolean, default: true }
+        timeoutMs: { type: integer, default: 60000 }
+        requiresEngine: { type: string }
+        capabilityKey: { type: string }
+        realness: { $ref: '#/components/schemas/Realness' }
+        enabled: { type: boolean, default: true }
+        agentExposed: { type: boolean, default: false }
+        agentToolName: { type: string, maxLength: 64 }
+        version: { type: string, maxLength: 20 }
+
+    Capabilities:
+      type: object
+      properties:
+        probedAt: { type: string, format: date-time }
+        tools:
+          type: array
+          items:
+            type: object
+            properties:
+              toolCode: { type: string }
+              available: { type: boolean }
+              probeMsg: { type: string, nullable: true }
+              realness: { $ref: '#/components/schemas/Realness' }
+        engines:
+          type: object
+          additionalProperties: { type: boolean }
+          example: { rdkit: true, vina: false, admet: false, crem: false, p2rank: false }
+        models:
+          type: object
+          additionalProperties: { type: boolean }
+          example: { dti: true, ppi: false, ddi: true }
+
+    # ---------------------------------------------------------------- 工作站
+    WorkspaceStateUpsert:
+      type: object
+      properties:
+        projectId: { type: integer, format: int64, nullable: true }
+        lastRoundId: { type: integer, format: int64, nullable: true }
+        lastMolId: { type: integer, format: int64, nullable: true }
+        activeTab: { type: string, enum: [CANVAS, CANDIDATES, DIFF, POCKET] }
+        openMolIds: { type: array, items: { type: integer, format: int64 } }
+        panelLayout: { type: object, additionalProperties: true }
+
+  responses:
+    Error:
+      description: 统一错误响应
+      content:
+        application/json:
+          schema:
+            allOf:
+              - $ref: '#/components/schemas/Result'
+              - type: object
+                properties:
+                  data: { $ref: '#/components/schemas/ErrorDetail' }
+    OkVoid:
+      description: 成功（data 为 null）
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Result' }
+    OkObject:
+      description: 成功（data 为对象）
+      content:
+        application/json:
+          schema:
+            allOf:
+              - $ref: '#/components/schemas/Result'
+              - type: object
+                properties:
+                  data: { type: object, additionalProperties: true }
+    Accepted:
+      description: 已受理（202）
+      content:
+        application/json:
+          schema:
+            allOf:
+              - $ref: '#/components/schemas/Result'
+              - type: object
+                properties:
+                  data: { $ref: '#/components/schemas/JobAccepted' }
+    AcceptedReport:
+      description: 已受理（202，含 reportId 便于前端先跳详情页）
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/AcceptedReport' }
+    LibraryItem:
+      description: 知识项
+      content:
+        application/json:
+          schema:
+            allOf:
+              - $ref: '#/components/schemas/Result'
+              - type: object
+                properties:
+                  data: { $ref: '#/components/schemas/LibraryItem' }
+    LibraryItemNodeList:
+      description: 知识项树
+      content:
+        application/json:
+          schema:
+            allOf:
+              - $ref: '#/components/schemas/Result'
+              - type: object
+                properties:
+                  data:
+                    type: array
+                    items: { $ref: '#/components/schemas/LibraryItemNode' }
+    PageOfLibraryItem: { $ref: '#/components/responses/PageOfLibraryItemBase' }
+    PageOfLibraryItemBase:
+      description: 知识项分页
+      content:
+        application/json:
+          schema:
+            allOf:
+              - $ref: '#/components/schemas/Result'
+              - type: object
+                properties:
+                  data:
+                    allOf:
+                      - $ref: '#/components/schemas/PageMeta'
+                      - type: object
+                        properties:
+                          list:
+                            type: array
+                            items: { $ref: '#/components/schemas/LibraryItem' }
+    Project:
+      description: 项目
+      content:
+        application/json:
+          schema:
+            allOf:
+              - $ref: '#/components/schemas/Result'
+              - type: object
+                properties:
+                  data: { $ref: '#/components/schemas/Project' }
+    PageOfProject:
+      description: 项目分页
+      content:
+        application/json:
+          schema:
+            allOf:
+              - $ref: '#/components/schemas/Result'
+              - type: object
+                properties:
+                  data:
+                    allOf:
+                      - $ref: '#/components/schemas/PageMeta'
+                      - type: object
+                        properties:
+                          list:
+                            type: array
+                            items: { $ref: '#/components/schemas/Project' }
+    Round:
+      description: 轮次
+      content:
+        application/json:
+          schema:
+            allOf:
+              - $ref: '#/components/schemas/Result'
+              - type: object
+                properties:
+                  data: { $ref: '#/components/schemas/Round' }
+    Target:
+      description: 靶点
+      content:
+        application/json:
+          schema:
+            allOf:
+              - $ref: '#/components/schemas/Result'
+              - type: object
+                properties:
+                  data: { $ref: '#/components/schemas/Target' }
+    PageOfTarget:
+      description: 靶点分页
+      content:
+        application/json:
+          schema:
+            allOf:
+              - $ref: '#/components/schemas/Result'
+              - type: object
+                properties:
+                  data:
+                    allOf:
+                      - $ref: '#/components/schemas/PageMeta'
+                      - type: object
+                        properties:
+                          list:
+                            type: array
+                            items: { $ref: '#/components/schemas/Target' }
+    ConstraintSet:
+      description: 约束集
+      content:
+        application/json:
+          schema:
+            allOf:
+              - $ref: '#/components/schemas/Result'
+              - type: object
+                properties:
+                  data: { $ref: '#/components/schemas/ConstraintSet' }
+    PageOfConstraintSet:
+      description: 约束集分页
+      content:
+        application/json:
+          schema:
+            allOf:
+              - $ref: '#/components/schemas/Result'
+              - type: object
+                properties:
+                  data:
+                    allOf:
+                      - $ref: '#/components/schemas/PageMeta'
+                      - type: object
+                        properties:
+                          list:
+                            type: array
+                            items: { $ref: '#/components/schemas/ConstraintSet' }
+    Candidate:
+      description: 候选
+      content:
+        application/json:
+          schema:
+            allOf:
+              - $ref: '#/components/schemas/Result'
+              - type: object
+                properties:
+                  data: { $ref: '#/components/schemas/Candidate' }
+    PageOfCandidate:
+      description: 候选分页
+      content:
+        application/json:
+          schema:
+            allOf:
+              - $ref: '#/components/schemas/Result'
+              - type: object
+                properties:
+                  data:
+                    allOf:
+                      - $ref: '#/components/schemas/PageMeta'
+                      - type: object
+                        properties:
+                          list:
+                            type: array
+                            items: { $ref: '#/components/schemas/Candidate' }
+    Leaderboard:
+      description: 排行榜（含可复现性证据）
+      content:
+        application/json:
+          schema:
+            allOf:
+              - $ref: '#/components/schemas/Result'
+              - type: object
+                properties:
+                  data: { $ref: '#/components/schemas/LeaderboardResponse' }
+    JobStatusResponse:
+      description: 任务状态
+      content:
+        application/json:
+          schema:
+            allOf:
+              - $ref: '#/components/schemas/Result'
+              - type: object
+                properties:
+                  data: { $ref: '#/components/schemas/JobStatusResponse' }
+    PageOfJob:
+      description: 任务分页
+      content:
+        application/json:
+          schema:
+            allOf:
+              - $ref: '#/components/schemas/Result'
+              - type: object
+                properties:
+                  data:
+                    allOf:
+                      - $ref: '#/components/schemas/PageMeta'
+                      - type: object
+                        properties:
+                          list:
+                            type: array
+                            items: { $ref: '#/components/schemas/JobStatusResponse' }
+    Report:
+      description: 报告
+      content:
+        application/json:
+          schema:
+            allOf:
+              - $ref: '#/components/schemas/Result'
+              - type: object
+                properties:
+                  data: { $ref: '#/components/schemas/Report' }
+    PageOfReport:
+      description: 报告分页
+      content:
+        application/json:
+          schema:
+            allOf:
+              - $ref: '#/components/schemas/Result'
+              - type: object
+                properties:
+                  data:
+                    allOf:
+                      - $ref: '#/components/schemas/PageMeta'
+                      - type: object
+                        properties:
+                          list:
+                            type: array
+                            items: { $ref: '#/components/schemas/Report' }
+    Experiment:
+      description: 实验记录
+      content:
+        application/json:
+          schema:
+            allOf:
+              - $ref: '#/components/schemas/Result'
+              - type: object
+                properties:
+                  data: { $ref: '#/components/schemas/Experiment' }
+    PageOfExperiment:
+      description: 实验分页
+      content:
+        application/json:
+          schema:
+            allOf:
+              - $ref: '#/components/schemas/Result'
+              - type: object
+                properties:
+                  data:
+                    allOf:
+                      - $ref: '#/components/schemas/PageMeta'
+                      - type: object
+                        properties:
+                          list:
+                            type: array
+                            items: { $ref: '#/components/schemas/Experiment' }
+    ExperimentAccuracy:
+      description: 实测准确率矩阵
+      content:
+        application/json:
+          schema:
+            allOf:
+              - $ref: '#/components/schemas/Result'
+              - type: object
+                properties:
+                  data: { $ref: '#/components/schemas/ExperimentAccuracy' }
+    Tool:
+      description: 工具
+      content:
+        application/json:
+          schema:
+            allOf:
+              - $ref: '#/components/schemas/Result'
+              - type: object
+                properties:
+                  data: { $ref: '#/components/schemas/Tool' }
+    PageOfTool:
+      description: 工具分页
+      content:
+        application/json:
+          schema:
+            allOf:
+              - $ref: '#/components/schemas/Result'
+              - type: object
+                properties:
+                  data:
+                    allOf:
+                      - $ref: '#/components/schemas/PageMeta'
+                      - type: object
+                        properties:
+                          list:
+                            type: array
+                            items: { $ref: '#/components/schemas/Tool' }
+    Capabilities:
+      description: 能力矩阵
+      content:
+        application/json:
+          schema:
+            allOf:
+              - $ref: '#/components/schemas/Result'
+              - type: object
+                properties:
+                  data: { $ref: '#/components/schemas/Capabilities' }

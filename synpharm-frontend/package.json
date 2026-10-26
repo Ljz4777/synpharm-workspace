@@ -1,0 +1,41 @@
+{
+  "name": "synpharm-pc",
+  "version": "1.0.0",
+  "description": "SynPharm - PC端药物研发预测平台",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build:ketcher": "vite build --config ketcher-app/vite.config.ts",
+    "build": "npm run build:ketcher && vue-tsc && vite build",
+    "preview": "vite preview"
+  },
+  "dependencies": {
+    "assert": "^2.1.0",
+    "axios": "^1.18.1",
+    "echarts": "^5.5.0",
+    "element-plus": "^2.6.1",
+    "events": "^3.3.0",
+    "ketcher-react": "^3.18.0",
+    "ketcher-standalone": "^3.18.0",
+    "molstar": "^5.11.0",
+    "pinia": "^2.1.7",
+    "raphael": "^2.3.0",
+    "react": "^19.2.8",
+    "react-dom": "^19.2.8",
+    "three": "^0.185.1",
+    "util": "^0.12.5",
+    "vue": "^3.4.21",
+    "vue-router": "^4.3.0"
+  },
+  "devDependencies": {
+    "@types/node": "^20.11.0",
+    "@types/react": "^19.2.18",
+    "@types/react-dom": "^19.2.4",
+    "@types/three": "^0.185.4",
+    "@vitejs/plugin-vue": "^5.0.3",
+    "sass": "^1.70.0",
+    "typescript": "^5.3.3",
+    "vite": "^5.1.0",
+    "vue-tsc": "^2.0.0"
+  }
+}

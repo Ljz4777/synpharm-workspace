@@ -1,0 +1,71 @@
+# =============================================================================
+# SynPharm 工作区根级忽略规则
+# =============================================================================
+# 各子项目（synpharm-frontend / synpharm-fastapi）另有自己的 .gitignore，
+# 这里只补根级与跨项目的东西。铁律：**任何含真实口令的文件都不进仓库**，
+# 模板一律叫 *.example。
+# =============================================================================
+
+# ---------- 环境变量与机密 ----------
+# 根 .env 与 synpharm-deploy/.env 存着数据库密码、JWT 密钥、内部令牌、
+# 算法引擎 API Key —— 一旦推到公开仓库等于把整套环境交出去。
+# 需要新环境时从 *.example 复制并重新生成（openssl rand -hex 32）。
+**/.env
+**/.env.local
+**/.env.*.local
+# 示例文件必须保留：它是不含真实值的唯一模板
+!**/.env.example
+
+# 证书 / 私钥
+*.pem
+*.key
+*.p12
+*.jks
+*.keystore
+
+# ---------- Java / Maven ----------
+**/target/
+*.class
+*.jar
+!**/maven-wrapper.jar
+
+# ---------- Node ----------
+**/node_modules/
+**/dist/
+**/dist-serve/
+*.tsbuildinfo
+
+# 分子编辑器子应用构建产物（npm run build:ketcher 生成，约 30 MB）
+# 克隆后按 README 重新构建，不要把 30 MB 的第三方产物塞进 git
+synpharm-frontend/public/ketcher/
+
+# ---------- Python ----------
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+env/
+.pytest_cache/
+.mypy_cache/
+
+# ---------- 本地备份与临时产物（不是源码） ----------
+# 迁移/重构前打的本地安全副本，含数据库转储，不进仓库
+/_synpharm-*.zip
+/_synpharm-*.sql
+*.bak
+*.orig
+*.rej
+
+# ---------- 日志 ----------
+*.log
+logs/
+
+# ---------- IDE / 系统 ----------
+.idea/
+*.iml
+*.swp
+*.swo
+.DS_Store
+Thumbs.db
+.vs/

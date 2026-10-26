@@ -1,0 +1,77 @@
+package com.synpharm.auth.api.dto;
+
+import com.synpharm.auth.domain.model.SysUser;
+import lombok.Builder;
+import lombok.Data;
+
+/**
+ * 用户信息响应DTO
+ *
+ * <p>用于返回用户信息的响应数据（不包含密码等敏感字段）。
+ *
+ * @author SynPharm Team
+ * @version 2.0.0
+ */
+@Data
+@Builder
+public class UserResponse {
+
+    /** 用户ID */
+    private Long id;
+
+    /** 用户邮箱 */
+    private String email;
+
+    /** 用户昵称 */
+    private String nickname;
+
+    /** 用户头像URL */
+    private String avatarUrl;
+
+    /** 用户角色 */
+    private String role;
+
+    /** 用户状态：0禁用，1启用 */
+    private Integer status;
+
+    /** 注册方式 */
+    private String registerType;
+
+    /** 邮箱验证状态：0未验证，1已验证 */
+    private Integer emailVerified;
+
+    /** 机构/单位（科研档案） */
+    private String institution;
+
+    /** 实验室/课题组（科研档案） */
+    private String lab;
+
+    /** ORCID iD（形如 0000-0002-1825-0097） */
+    private String orcid;
+
+    /** 研究方向（科研档案） */
+    private String researchArea;
+
+    /**
+     * 从实体对象转换为响应DTO
+     *
+     * @param user 用户实体对象
+     * @return 用户响应DTO
+     */
+    public static UserResponse fromEntity(SysUser user) {
+        return UserResponse.builder()
+                .id(user.getId())
+                .email(user.getEmail())
+                .nickname(user.getNickname())
+                .avatarUrl(user.getAvatarUrl())
+                .role(user.getRole())
+                .status(user.getStatus())
+                .registerType(user.getRegisterType())
+                .emailVerified(user.getEmailVerified())
+                .institution(user.getInstitution())
+                .lab(user.getLab())
+                .orcid(user.getOrcid())
+                .researchArea(user.getResearchArea())
+                .build();
+    }
+}

@@ -1,0 +1,145 @@
+server:
+  # 刻意占 8080：与现有 BACKEND_PORT / 前端 dev 回退地址 / nginx 反代一致，前端与 nginx 零改动
+  port: ${SERVER_PORT:8080}
+
+spring:
+  application:
+    name: synpharm-gateway
+  main:
+    web-application-type: reactive
+
+  cloud:
+    nacos:
+      server-addr: ${NACOS_SERVER_ADDR:localhost:8848}
+      username: ${NACOS_USERNAME:nacos}
+      password: ${NACOS_PASSWORD:nacos}
+      discovery:
+        # 想脱离 Nacos 单跑时设 NACOS_DISCOVERY_ENABLED=false（此时 lb:// 无法解析，路由必然 503）
+        enabled: ${NACOS_DISCOVERY_ENABLED:true}
+        register-enabled: ${NACOS_REGISTER_ENABLED:true}
+        namespace: ${NACOS_NAMESPACE:}
+        group: ${NACOS_GROUP:DEFAULT_GROUP}
+        # 注册失败只记 ERROR 不阻断启动；网关自身不注册也能代理转发
+        fail-fast: false
+      config:
+        # 配置中心默认不启用（启用方式见 application-nacos.yml）。
+        # 不关掉这个校验的话，只要 classpath 上有 nacos-config 就会因缺少 spring.config.import 而启动失败。
+        import-check:
+          enabled: false
+
+    gateway:
+      discovery:
+        locator:
+          # 只走显式路由表，不用「按服务名自动生成路由」
+          enabled: false
+      routes:
+        # ===== 阶段 1：auth 已独立（身份与访问） =====
+        # 必须排在兜底路由之前：Spring Cloud Gateway 按声明顺序匹配，先命中者生效
+        - id: auth
+          uri: lb://synpharm-auth
+          predicates:
+            - Path=/api/auth/**,/api/users/**
+        # ===== 2026-10-22 服务收敛：design + asset + platform 合并为 synpharm-core =====
+        # 原先这里有两条路由：
+        #   platform-design-tools → lb://synpharm-platform（Path=/api/design/tools/**,/api/design/capabilities）
+        #   design                → lb://synpharm-design
+        # 且前者**必须**排在后者之前，否则 /api/design/tools/** 会被 /api/design/** 静默吃掉成 404。
+        # 合并后由一条路由承接整个设计域，这个隐式顺序依赖随之消失。
+        # 尚未实现的端点仍是干净的 404（由 GatewayErrorWebExceptionHandler 包成信封）。
+        - id: core
+          uri: lb://synpharm-core
+          predicates:
+            - Path=/api/design/**
+        # ===== 阶段 4：predict 已独立（预测域） =====
+        # 5 个前缀逐字取自规范 §6；必须排在兜底路由之前。
+        # 切流前已在服务内直连验证：predict / results / favorites / tasks 均 200，
+        # /api/batch/** 亦已挂载（不存在批次返回业务 404 RESOURCE_NOT_FOUND）。
+        - id: predict
+          uri: lb://synpharm-predict
+          predicates:
+            - Path=/api/predict/**,/api/results/**,/api/favorites/**,/api/tasks/**,/api/batch/**
+        # ===== 阶段 4 顺带：/api/system/** 原迁到 platform，现随收敛回到 core =====
+        # 单体的最后一个 Controller 是 SystemController，预测域迁出后它失去了所依赖的
+        # FastApiClient，因此连同能力探测一起迁出（EngineHealthClient）。
+        # 该端点随 platform 一并并入 core，故路由目标改为 synpharm-core。
+        - id: core-system
+          uri: lb://synpharm-core
+          predicates:
+            - Path=/api/system/**
+        # ===== 单体兜底路由已移除（2026-10-16 单体退役） =====
+        # 原先此处是一条 `id: monolith` → `lb://synpharm-backend`、`Path=/api/**` 的兜底路由。
+        # 单体已零端点（最后一个 Controller `SystemController` 于阶段 4 迁到 platform），
+        # 保留它只会让未匹配的路径**路由到一个没有端点的服务**并得到 500，
+        # 而删除后由网关直接给出 404 —— 语义更准，也省掉一次无意义的转发。
+        # ⚠ 删除前提：所有已实现的 `/api/**` 前缀都必须有明确的专属路由（见上方 5 条）。
+        # 回滚方式：恢复本路由并把 docker-compose 里的 backend 服务加回。
+      default-filters:
+        # 阶段 0 下游仍会自己产生 CORS 头，去重避免浏览器报错
+        - DedupeResponseHeader=Access-Control-Allow-Origin Access-Control-Allow-Credentials, RETAIN_FIRST
+
+  data:
+    redis:
+      host: ${REDIS_HOST:localhost}
+      port: ${REDIS_PORT:6379}
+      password: ${REDIS_PASSWORD:}
+      # 必须与单体同库：Token 黑名单是跨服务共享键（token:blacklist:*）
+      database: ${REDIS_DB_GATEWAY:0}
+      timeout: 3000ms
+
+jwt:
+  # 与单体同密钥：留空或不足 32 字节则启动失败（fail-fast）
+  secret: ${JWT_SECRET:}
+  expiration: ${JWT_EXPIRATION:86400000}
+
+synpharm:
+  gateway:
+    auth:
+      # 阶段 1 = true：网关是唯一鉴权点，未通过鉴权的请求不再转发
+      enforce: ${GATEWAY_AUTH_ENFORCE:true}
+      # 单体已改为读内部身份头，不再自行验签 Token，故不再透传 Authorization
+      forward-authorization: ${GATEWAY_FORWARD_AUTHORIZATION:false}
+      # 与各服务共享的内部口令；须与下游 INTERNAL_TOKEN 一致
+      internal-token: ${INTERNAL_TOKEN:}
+      public-paths:
+        # 下游服务的公开接口（这些路径不再要求 Token）
+        # ⚠ 本清单只对「已被下面 routes 匹配」的路径生效。网关现有 4 条路由
+        #   （auth、core、predict、core-system），
+        #   所以下面 actuator / swagger / doc.html / webjars 那几条今天不匹配任何路由，
+        #   列与不列行为一致（它们由网关自身 handler 服务，不经过鉴权过滤器）。
+        #   保留是为将来加 API 文档路由时备用；若真加了路由，请重新核对这份清单。
+        - /api/auth/login
+        - /api/auth/register
+        - /api/auth/captcha/send
+        - /api/auth/password/reset
+        - /api/system/algorithm-health
+        # —— 以下当前不匹配任何路由（无效项，见上方说明）——
+        - /actuator/health
+        - /actuator/info
+        - /swagger-ui/**
+        - /v3/api-docs/**
+        - /doc.html
+        - /webjars/**
+        - /favicon.ico
+    cors:
+      # 单体退役（2026-10-16）后下游 5 个服务已无任何 CORS 配置，不再有"重复响应头"的风险。
+      # 前端 dev（5174）直连网关（8080）属跨域，关闭时预检返回 403 且无 Allow-Origin，
+      # 浏览器会直接拦掉登录请求。故默认开启。
+      enabled: ${GATEWAY_CORS_ENABLED:true}
+
+management:
+  endpoints:
+    web:
+      exposure:
+        # 刻意不暴露 gateway 端点：它会吐出完整路由表（内部拓扑）。
+        # 注：此前 include 里写了 gateway，但该端点实际返回 404（未生效），
+        # 属于「配置声称暴露了、其实没有」——已按事实去掉；真需要时再加回来，
+        # 并明确它会把内部路由结构暴露给能访问 actuator 的人。
+        include: health,info
+  endpoint:
+    health:
+      show-details: always
+
+logging:
+  level:
+    com.synpharm: info
+    org.springframework.cloud.gateway: info

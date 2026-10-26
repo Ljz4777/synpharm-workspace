@@ -1,0 +1,162 @@
+-- =============================================================================
+-- 阶段 2A：design 域独立 schema 迁移
+-- 日期：2026-10-14
+-- 来源：docs/architecture/SpringCloud微服务重构方案.md §8.3、§11
+--
+-- 目标：把设计域 19 张表从 synpharm 迁到 synpharm_design，并断开全部跨 schema 外键。
+--
+-- ⚠ 本脚本只覆盖「已部署库」的改造。全新部署由 docker-entrypoint-initdb.d 下的
+--   11_~38_ 脚本直接建到 synpharm_design，无需执行本脚本。
+--
+-- ⚠ 旧库 synpharm 里的 19 张设计表**本阶段刻意保留不删**：
+--   单体仍在对外提供设计域 79 个接口，提前删表会让现有功能直接 500。
+--   它们的删除时点是 2B（端点实现完成、网关切流）之后的收尾，见文件末尾 §4。
+-- =============================================================================
+
+-- -----------------------------------------------------------------------------
+-- §1 schema 与账号
+-- -----------------------------------------------------------------------------
+-- 已由 sql/00_create_accounts.sh 的 design 分支（或等效手工 SQL）创建：
+--   CREATE DATABASE synpharm_design DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+--   GRANT SELECT, INSERT, UPDATE, DELETE, CREATE, DROP, INDEX, ALTER, REFERENCES
+--     ON synpharm_design.* TO 'synpharm_design'@'%';
+-- 账号口令来自 .env 的 DESIGN_DB_PASSWORD，不进源码。
+
+-- -----------------------------------------------------------------------------
+-- §2 建表 + 灌数据（在 synpharm_design 上执行）
+-- -----------------------------------------------------------------------------
+-- 2.1 按顺序执行设计域建表脚本（脚本内已 USE synpharm_design;）
+--   11_design_project.sql            12_project_target.sql    13_design_round.sql
+--   14_target.sql                    15_target_structure.sql  16_binding_pocket.sql
+--   17_constraint_set.sql            18_constraint_rule.sql   19_generation_run.sql
+--   20_candidate_molecule.sql        21_molecule_edit_log.sql 22_metric_definition.sql
+--   23_evaluation_run.sql            24_evaluation_result.sql 25_workspace_state.sql
+--   30_design_library_item.sql       33_design_job.sql        34_design_report.sql
+--   35_wet_experiment.sql
+-- 2.2 幂等修订（含索引/生成列补齐）
+--   36_design_domain_revision.sql    38_design_index_tuning.sql
+-- 2.3 37_design_seed_data.sql 已在 22_ 中内联了 metric_definition 基础 17 行；
+--     迁移场景**不要**再执行 37_，改为直接从旧库复制真实数据（含 36_/37_ 追加的 7 行）。
+
+-- -----------------------------------------------------------------------------
+-- §3 数据搬运（root 执行，注意跳过生成列）
+-- -----------------------------------------------------------------------------
+-- 见 §3.1 的单表语句模板。实测结果：
+--   metric_definition    24 行
+--   design_library_item  22 行
+--   其余 17 张表 0 行
+--
+-- §3.1 模板（列清单必须显式，否则 evaluation_result.risk_first_smarts /
+--      project_target.primary_project_id 等生成列会报 3105）：
+--
+--   SET FOREIGN_KEY_CHECKS = 0;
+--   TRUNCATE TABLE synpharm_design.<t>;   -- 目标表可能有 22_ 内联种子，必须先清
+--   INSERT INTO synpharm_design.<t> (<非生成列清单>)
+--     SELECT <非生成列清单> FROM synpharm.<t>;
+--   SET FOREIGN_KEY_CHECKS = 1;
+--
+-- §3.2 非生成列清单取法：
+--   SELECT GROUP_CONCAT(CONCAT('`', COLUMN_NAME, '`') ORDER BY ORDINAL_POSITION)
+--     FROM information_schema.COLUMNS
+--    WHERE TABLE_SCHEMA = 'synpharm' AND TABLE_NAME = '<t>'
+--      AND IFNULL(GENERATION_EXPRESSION, '') = '';
+
+-- -----------------------------------------------------------------------------
+-- §4 跨 schema 外键（本阶段已在 SQL 源文件中永久移除）
+-- -----------------------------------------------------------------------------
+-- 实测旧库这 19 张表上共 39 条外键，其中 6 条跨 schema，已全部删除；
+-- 新库 synpharm_design 保留 33 条同库外键（39 - 6 = 33，已实测核对一致）。
+--
+-- 6 条跨 schema 外键及其归属服务：
+--   candidate_molecule.fk_cand_structure  -> file_asset(id)      synpharm_asset   阶段 3
+--   evaluation_result.fk_er_tool          -> design_tool(id)     synpharm_platform 阶段 5
+--   design_job.fk_job_tool                -> design_tool(id)     synpharm_platform 阶段 5
+--   target_structure.fk_struct_asset      -> file_asset(id)      synpharm_asset   阶段 3
+--   wet_experiment.fk_we_asset            -> file_asset(id)      synpharm_asset   阶段 3
+--   design_report.fk_rpt_session          -> agent_session(id)   synpharm_agent   二期
+--
+-- 对照说明：本项与方案 §8.3 的差异 → §8.3 只登记了 3 条（漏了 34_/35_ 的内联外键与
+-- 36_ 里 3 处延迟外键中的 2 处），实际为 6 条。方案文档已在 v1.2.1 更正。
+--
+-- 已改的 SQL 源文件（USE synpharm; -> USE synpharm_design; 共 22 个）：
+--   11~25、30、33~38
+-- 已删外键的 SQL 源文件（6 条）：
+--   33_design_job.sql(内联 fk_job_tool)
+--   34_design_report.sql(内联 fk_rpt_session)
+--   35_wet_experiment.sql(内联 fk_we_asset)
+--   36_design_domain_revision.sql(延迟 fk_cand_structure / fk_er_tool / fk_struct_asset)
+--
+-- 补救（若已部署库中仍存在，可手工执行）：
+--   ALTER TABLE synpharm.candidate_molecule  DROP FOREIGN KEY fk_cand_structure;
+--   ALTER TABLE synpharm.evaluation_result   DROP FOREIGN KEY fk_er_tool;
+--   ALTER TABLE synpharm.design_job          DROP FOREIGN KEY fk_job_tool;
+--   ALTER TABLE synpharm.target_structure    DROP FOREIGN KEY fk_struct_asset;
+--   ALTER TABLE synpharm.wet_experiment      DROP FOREIGN KEY fk_we_asset;
+--   ALTER TABLE synpharm.design_report       DROP FOREIGN KEY fk_rpt_session;
+
+-- -----------------------------------------------------------------------------
+-- §5 遗留项：旧表删除 —— **已于 2026-10-16 执行完毕（阶段 2B 收尾）**
+-- -----------------------------------------------------------------------------
+-- 前置条件（三者已全部满足）：
+--   ① synpharm-design 已实现全部设计域端点并注册（51/99，见方案 §11.4）；
+--   ② 网关 /api/design/** 路由已切到 design 服务（2026-10-14 完成）；
+--   ③ 单体中设计域代码已删除（2026-10-15 阶段 4 完成；单体现仅剩 11 个框架文件、零端点）。
+--
+-- 执行结果（实测）：
+--   DROP 前：synpharm 19 张设计域镜像表 —— 17 张 0 行，仅 design_library_item 22 行、
+--            metric_definition 24 行（均为种子回放，synpharm_design 里有同一份）。
+--   前置校验：synpharm 内**无**这 19 张表之外的表指向它们（查询返回空）。
+--   DROP 后：synpharm 剩余表数 **0**、synpharm_design 19、synpharm_predict 10、
+--            全库跨 schema 外键 **0**。
+--   ⚠️ 至此 synpharm 库**已无任何自有表** —— 它只是「单体退役」尚未走完而留下的空壳。
+--   备份：`_synpharm-db-backup-legacy-design-mirror-20261016.sql`（工作区根目录，gz）。
+--
+-- 实际执行的语句（留档）：
+--   SET FOREIGN_KEY_CHECKS = 0;
+--   DROP TABLE IF EXISTS
+--     synpharm.design_project,       synpharm.project_target,    synpharm.design_round,
+--     synpharm.target,               synpharm.target_structure,  synpharm.binding_pocket,
+--     synpharm.constraint_set,       synpharm.constraint_rule,   synpharm.generation_run,
+--     synpharm.candidate_molecule,   synpharm.molecule_edit_log, synpharm.metric_definition,
+--     synpharm.evaluation_run,       synpharm.evaluation_result, synpharm.workspace_state,
+--     synpharm.design_library_item,  synpharm.design_job,        synpharm.design_report,
+--     synpharm.wet_experiment;
+--   SET FOREIGN_KEY_CHECKS = 1;
+--
+-- 配套改动：`sql/39_legacy_monolith_design_mirror.sh` 已**删除**（全新部署不再回放镜像表）。
+-- 关联查询：
+--   SELECT k.TABLE_NAME, k.CONSTRAINT_NAME, k.REFERENCED_TABLE_NAME
+--     FROM information_schema.KEY_COLUMN_USAGE k
+--    WHERE k.TABLE_SCHEMA = 'synpharm' AND k.REFERENCED_TABLE_SCHEMA = 'synpharm'
+--      AND k.REFERENCED_TABLE_NAME IN ('design_project', ...)   -- 19 张表
+--      AND k.TABLE_NAME NOT IN ('design_project', ...);         -- 实测为空
+
+-- -----------------------------------------------------------------------------
+-- §6 全新部署路径（与已部署库不同，不需要执行本脚本）
+-- -----------------------------------------------------------------------------
+-- `docker compose down -v` 之后重建时，docker-entrypoint-initdb.d 会依次执行：
+--
+--   00_create_accounts.sh  建 synpharm_auth / synpharm_design 等独立账号（从环境变量读口令）
+--   00_create_database.sql 建 5 个空 schema
+--   01_~38_                建表 / 灌种子；设计域 22 个脚本已指向 synpharm_design
+--
+-- ⚠️ 2026-10-16 起**不再有 39_** 那一步：镜像钩子已删除，全新部署的 `synpharm` 库
+--    保持为空（旧表已 DROP，见 §5）。若将来把单体也退役掉，`00_create_database.sql`
+--    里的 `synpharm` schema 本身也可一并去掉。
+--
+-- 实测（空数据卷跑完整初始化）结果（2026-10-16 复测，见 §5）：
+--   synpharm_design  19 张表 / metric_definition 24 行 / design_library_item 22 行 / 33 条同库外键 / 0 条跨库外键
+--   synpharm         0 张表（镜像钩子已删除）
+--   账号              synpharm_auth、synpharm_design 等均按最小授权创建
+--
+-- 本次一并修掉的 3 个「全新部署才暴露」的既有缺陷（均已实测通过）：
+--   ① 00_create_accounts.sh（以及当时还在的 39_*.sh）使用 CRLF 行尾，Linux 下 shebang
+--      变成 `/bin/bash^M` → `bad interpreter`，账号脚本**从未真正执行过**。已统一改 LF。
+--      （39_*.sh 已于 2026-10-16 删除，仅 00_ 还在。）
+--   ② 07_test_data.sql 仍向 synpharm.sys_user 写测试数据，而该表阶段 1 已迁到
+--      synpharm_auth → 报 1146 并使**整个初始化中断**。已改为切库到 synpharm_auth，
+--      并显式指定 id=1（下面 predict_* 测试数据引用 user_id = 1）。
+--   ③ 37_design_seed_data.sql 在 USE synpharm_design 之后仍写 design_tool，而该表
+--      阶段 5 才迁出（当前建表脚本 32_ 仍指向 synpharm）→ 全新部署必然失败。
+--      已改为全限定名 synpharm.design_tool。
+

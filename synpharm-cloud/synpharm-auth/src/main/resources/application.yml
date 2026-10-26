@@ -1,0 +1,101 @@
+server:
+  port: ${SERVER_PORT:8081}
+
+spring:
+  application:
+    name: synpharm-auth
+
+  cloud:
+    nacos:
+      server-addr: ${NACOS_SERVER_ADDR:localhost:8848}
+      username: ${NACOS_USERNAME:nacos}
+      password: ${NACOS_PASSWORD:nacos}
+      discovery:
+        enabled: ${NACOS_DISCOVERY_ENABLED:true}
+        register-enabled: ${NACOS_REGISTER_ENABLED:true}
+        namespace: ${NACOS_NAMESPACE:}
+        group: ${NACOS_GROUP:DEFAULT_GROUP}
+        fail-fast: false
+      config:
+        import-check:
+          enabled: false
+
+  # 本服务专属 schema；账号只对本 schema 有权限（拆分铁律 R2）
+  datasource:
+    driver-class-name: com.mysql.cj.jdbc.Driver
+    url: jdbc:mysql://${DB_HOST:localhost}:${DB_PORT:3306}/${AUTH_DB_NAME:synpharm_auth}?useUnicode=true&characterEncoding=utf8&serverTimezone=Asia/Shanghai
+    username: ${AUTH_DB_USER:synpharm_auth}
+    password: ${AUTH_DB_PASSWORD:}
+    hikari:
+      maximum-pool-size: ${AUTH_DB_POOL_SIZE:10}
+
+  data:
+    redis:
+      host: ${REDIS_HOST:localhost}
+      port: ${REDIS_PORT:6379}
+      password: ${REDIS_PASSWORD:}
+      # 必须与网关同库：token:blacklist:* 是跨服务共享键，网关要能读到登出结果。
+      # 本服务自有键统一加 auth: 前缀做命名空间隔离。
+      database: ${REDIS_DB_AUTH:0}
+      timeout: 3000ms
+
+  mail:
+    host: ${MAIL_HOST:smtp.qq.com}
+    port: ${MAIL_PORT:465}
+    username: ${QQ_EMAIL:}
+    password: ${QQ_EMAIL_AUTH_CODE:}
+    properties:
+      mail:
+        smtp:
+          auth: true
+          ssl:
+            enable: true
+          starttls:
+            enable: true
+
+mybatis-plus:
+  mapper-locations: classpath*:/mapper/**/*.xml
+  type-aliases-package: com.synpharm.auth.domain.model
+  configuration:
+    map-underscore-to-camel-case: true
+  global-config:
+    db-config:
+      id-type: auto
+      logic-delete-field: deleted
+      logic-delete-value: 1
+      logic-not-delete-value: 0
+
+jwt:
+  # 与网关、单体同密钥。本服务只**签发**，不校验（校验在网关）
+  secret: ${JWT_SECRET:}
+  expiration: ${JWT_EXPIRATION:86400000}
+
+synpharm:
+  internal:
+    # 网关注入 X-Internal-Token 用的共享口令；未配置则本服务拒绝信任任何身份头（fail-closed）
+    token: ${INTERNAL_TOKEN:}
+
+knife4j:
+  enable: ${KNIFE4J_ENABLED:true}
+  setting:
+    language: zh_cn
+
+app:
+  name: ${APP_NAME:SynPharm}
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info
+  endpoint:
+    health:
+      show-details: always
+  health:
+    # 邮箱为可选功能，未配置时不影响健康状态
+    mail:
+      enabled: false
+
+logging:
+  level:
+    com.synpharm: ${LOG_LEVEL:info}

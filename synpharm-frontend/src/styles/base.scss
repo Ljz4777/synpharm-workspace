@@ -1,0 +1,357 @@
+/**
+ * 全局基础层（由 main.ts 引入一次）
+ *
+ * 职责：
+ *   1. 把 Element Plus 的主题变量对齐到本项目的设计 Token
+ *   2. 定义应用自身的语义 CSS 变量（供运行时读取 / 未来主题切换使用）
+ *   3. 提供全局的焦点、选中、滚动条、动效与少量通用工具类
+ *
+ * 注意：SCSS 变量来自 @/styles/variables.scss（vite additionalData 自动注入），
+ *       本文件无需再 import。
+ */
+
+// ---------------------------------------------------------------------------
+// 1. 与 Element Plus 主题对齐
+//
+// Element Plus 默认主色是 #409eff，与项目品牌色（科研青绿 #0d9488）并不相同——
+// 这是"页面样式割裂"的一个主要来源：原生按钮/下拉/分页的颜色与自定义组件对不上。
+// 这里把 el 变量统一映射到本项目的 Token。
+// ---------------------------------------------------------------------------
+:root {
+  --el-color-primary: #{$accent-color};
+  --el-color-primary-light-3: #{mix(#fff, $accent-color, 30%)};
+  --el-color-primary-light-5: #{mix(#fff, $accent-color, 50%)};
+  --el-color-primary-light-7: #{mix(#fff, $accent-color, 70%)};
+  --el-color-primary-light-8: #{mix(#fff, $accent-color, 80%)};
+  --el-color-primary-light-9: #{mix(#fff, $accent-color, 90%)};
+  --el-color-primary-dark-2: #{mix(#000, $accent-color, 20%)};
+
+  --el-color-success: #{$success-color};
+  --el-color-warning: #{$warning-color};
+  --el-color-danger: #{$error-color};
+  --el-color-error: #{$error-color};
+  --el-color-info: #{$info-color};
+
+  --el-text-color-primary: #{$text-primary};
+  --el-text-color-regular: #{$text-secondary};
+
+  --el-border-radius-base: #{$border-radius-sm};
+  --el-border-color: #{$border-color};
+
+  // -------------------------------------------------------------------------
+  // 2. 应用自身的语义变量
+  //    JS 侧或未来主题切换可读写这些变量，无需改动任何组件
+  // -------------------------------------------------------------------------
+  --sp-color-brand: #{$accent-color};
+  --sp-color-canvas: #{$bg-secondary};
+  --sp-color-surface: #{$bg-primary};
+  --sp-color-border: #{$border-color};
+  --sp-color-text: #{$text-primary};
+  --sp-color-text-soft: #{$text-secondary};
+  --sp-radius-card: #{$border-radius-lg};
+  --sp-shadow-card: #{$shadow-md};
+  --sp-header-height: #{$header-height};
+
+  // 左侧导航宽度：展开 / 收起两个值，正文区的左偏移跟随 --sp-nav-width
+  --sp-nav-width-expanded: #{$sidebar-width};
+  --sp-nav-width-collapsed: #{$nav-width-collapsed};
+  --sp-nav-width: #{$sidebar-width};
+}
+
+// ---------------------------------------------------------------------------
+// 3. 排版与基础元素
+// ---------------------------------------------------------------------------
+html {
+  // 数值型数据等宽对齐：科学/统计表格里数字宽度不一会导致列抖动
+  font-variant-numeric: tabular-nums;
+}
+
+body {
+  font-family: $font-family-base;
+  color: $color-text;
+  background: $color-canvas;
+  // 中文在 14px 下偏紧，一点点字距能让长段说明文读起来不那么糊
+  letter-spacing: 0.01em;
+}
+
+// 码值、序列、InChIKey 这类逐位比对的内容统一走等宽
+code,
+kbd,
+pre,
+samp {
+  font-family: $font-family-mono;
+}
+
+// 键盘可达性：仅在键盘聚焦时显示焦点圈，鼠标点击不显示
+:focus-visible {
+  outline: 2px solid $color-brand;
+  outline-offset: 2px;
+  border-radius: $border-radius-sm;
+}
+
+::selection {
+  background: rgba(13, 148, 136, 0.18);
+}
+
+// 统一滚动条到浅色细条（默认滚动条在深色顶栏与浅色卡片上都很突兀）
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: rgba(74, 97, 105, 0.26);
+  border-radius: $radius-pill;
+
+  &:hover {
+    background: rgba(74, 97, 105, 0.42);
+  }
+}
+
+// ---------------------------------------------------------------------------
+// 4. 动效关键帧
+// ---------------------------------------------------------------------------
+@keyframes sp-shimmer {
+  0% {
+    background-position: -420px 0;
+  }
+  100% {
+    background-position: 420px 0;
+  }
+}
+
+@keyframes sp-fade-up {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+@keyframes sp-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+// ---------------------------------------------------------------------------
+// 5. 通用工具类（前缀 u-，避免与业务类名冲突）
+// ---------------------------------------------------------------------------
+
+/** 数值等宽：用于表格中的数值列 */
+.u-tabular {
+  font-variant-numeric: tabular-nums;
+}
+
+/** 内容入场上浮：用于列表/卡片首屏 */
+.u-fade-up {
+  animation: sp-fade-up 0.32s $ease-out both;
+}
+
+/** 骨架屏底色：替代纯文本"加载中…" */
+.u-skeleton {
+  display: block;
+  background: linear-gradient(90deg, #eef2f7 25%, #dfe8e6 37%, #eef2f7 50%);
+  background-size: 840px 100%;
+  border-radius: $border-radius-sm;
+  animation: sp-shimmer 1.4s linear infinite;
+}
+
+/** 载入中转圈 */
+.u-spinner {
+  display: inline-block;
+  width: 14px;
+  height: 14px;
+  border: 2px solid rgba(13, 148, 136, 0.25);
+  border-top-color: $accent-color;
+  border-radius: 50%;
+  animation: sp-spin 0.7s linear infinite;
+}
+
+/** 视觉隐藏但保留给屏幕阅读器 */
+.u-visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+/** 主内容区容器：统一最大宽度与居中，避免超宽屏内容被拉散 */
+.u-container {
+  width: 100%;
+  max-width: $content-max-width;
+  margin: 0 auto;
+}
+
+// ---------------------------------------------------------------------------
+// 6. 内容区宽度统一 + 居中
+//
+// 两级制，避免页面之间出现宽度差异与"跳跃感"：
+//   · 内容型页面（列表 / 详情 / 表单 / 设置）→ 1200px
+//   · 画布型页面（3D 可视化等需宽幅展示）    → 1440px
+//
+// 各视图内部不要再各写一套 max-width：scoped 样式优先级更高，会覆盖这里。
+// 新增页面时，把它的主内容类名加进对应列表即可。
+// ---------------------------------------------------------------------------
+.db__main,
+.pc__main,
+.rs__main,
+.tg__main,
+.tk__main,
+.profile__content,
+.result-detail__content,
+.task-detail__content,
+.bl__main,
+.gn__main,
+.ev__main,
+.dc__main,
+.pj__main,
+.mw__main {
+  width: 100%;
+  max-width: $content-max-width-narrow;
+  margin-left: auto;
+  margin-right: auto;
+}
+
+.visualization__content {
+  width: 100%;
+  max-width: $content-max-width;
+  margin-left: auto;
+  margin-right: auto;
+}
+
+// ---------------------------------------------------------------------------
+// 7. 基础控件：按钮 / 提示横幅 / 标签
+//
+// 这些类在多个页面重复使用。此前它们只散落在个别页面的 scoped 样式里，
+// 没定义到的页面就会退化成浏览器默认样式（灰底凸起按钮、裸文字横幅）——
+// 这就是「新页面看着比老页面丑」的根因。放在全局，新增页面不用再抄一遍。
+// ---------------------------------------------------------------------------
+.btn {
+  height: 32px;
+  padding: 0 14px;
+  border: 1px solid $color-border;
+  border-radius: $radius-control;
+  background: $color-surface;
+  font-size: $font-size-sm;
+  color: $color-text;
+  white-space: nowrap;
+  cursor: pointer;
+  transition: background $transition-fast, border-color $transition-fast;
+
+  &:hover:not(:disabled) {
+    background: $color-surface-alt;
+  }
+
+  &:disabled {
+    opacity: 0.55;
+    cursor: not-allowed;
+  }
+
+  &--primary {
+    border-color: $color-brand;
+    background: $color-brand;
+    color: #fff;
+
+    &:hover:not(:disabled) {
+      background: $color-brand-strong;
+    }
+  }
+
+  &--danger {
+    border-color: rgba($error-color, 0.45);
+    color: $error-color;
+
+    &:hover:not(:disabled) {
+      background: rgba($error-color, 0.08);
+    }
+  }
+
+  &--sm {
+    height: 26px;
+    padding: 0 10px;
+    font-size: $font-size-xs;
+  }
+}
+
+.banner {
+  margin: 0;
+  padding: 10px 14px;
+  border-radius: $radius-control;
+  font-size: $font-size-sm;
+  line-height: 1.6;
+
+  &--danger {
+    background: rgba($error-color, 0.09);
+    color: mix(#000, $error-color, 12%);
+  }
+
+  &--ok {
+    background: rgba($success-color, 0.1);
+    color: mix(#000, $success-color, 12%);
+  }
+
+  &--warn {
+    background: rgba($warning-color, 0.12);
+    color: mix(#000, $warning-color, 14%);
+  }
+}
+
+/** 小圆角标签：状态 / 风险等级 / 原因码 */
+.tag {
+  display: inline-block;
+  padding: 2px 8px;
+  border-radius: $radius-pill;
+  font-size: $font-size-xs;
+  font-weight: $font-weight-medium;
+  line-height: 1.5;
+  white-space: nowrap;
+
+  &--success,
+  &--ok {
+    color: $success-color;
+    background: rgba($success-color, 0.12);
+  }
+
+  &--warning {
+    color: $warning-color;
+    background: rgba($warning-color, 0.14);
+  }
+
+  &--danger,
+  &--bad {
+    color: $error-color;
+    background: rgba($error-color, 0.12);
+  }
+
+  &--info {
+    color: $info-color;
+    background: rgba($info-color, 0.12);
+  }
+
+  &--neutral {
+    color: $text-muted;
+    background: rgba($text-muted, 0.14);
+  }
+}
+
+// 尊重用户的"减少动效"系统偏好
+@media (prefers-reduced-motion: reduce) {
+  .u-fade-up,
+  .u-skeleton,
+  .u-spinner {
+    animation: none;
+  }
+}

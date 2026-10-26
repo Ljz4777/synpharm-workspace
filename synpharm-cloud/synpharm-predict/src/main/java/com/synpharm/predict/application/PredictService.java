@@ -1,0 +1,36 @@
+package com.synpharm.predict.application;
+
+import com.synpharm.predict.api.dto.DDIPredictRequest;
+import com.synpharm.predict.api.dto.DTIPredictRequest;
+import com.synpharm.predict.api.dto.GeneralPredictRequest;
+import com.synpharm.predict.api.dto.PPIPredictRequest;
+import com.synpharm.predict.api.dto.DdiDrugListResponse;
+import com.synpharm.predict.api.dto.PredictResultResponse;
+
+import java.util.List;
+
+public interface PredictService {
+
+    PredictResultResponse predictDTI(DTIPredictRequest request, Long userId);
+
+    PredictResultResponse predictPPI(PPIPredictRequest request, Long userId);
+
+    PredictResultResponse predictDDI(DDIPredictRequest request, Long userId);
+
+    PredictResultResponse predict(GeneralPredictRequest request, Long userId);
+
+    /**
+     * 获取当前用户的预测历史列表
+     *
+     * @param userId 用户ID
+     * @return 预测历史列表
+     */
+    List<PredictResultResponse> getHistory(Long userId);
+
+    /**
+     * 获取 DDI 可预测药物白名单（模型能力边界）。
+     *
+     * @return 可预测药物列表；total 为 0 表示 DDI 权重未就绪
+     */
+    DdiDrugListResponse getDdiSupportedDrugs();
+}

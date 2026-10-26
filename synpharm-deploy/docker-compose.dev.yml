@@ -1,0 +1,455 @@
+# =============================================================================
+# SynPharm 开发环境编排（源码挂载 + 热重载）
+#
+# 约定目录结构（4 仓库 clone 到同一父目录）：
+#   synpharm-workspace/
+#   ├── synpharm-frontend/
+#   ├── synpharm-cloud/
+#   ├── synpharm-fastapi/
+#   └── synpharm-deploy/       ← 本文件所在仓库
+#
+# 启动：
+#   cd synpharm-workspace
+#   cp synpharm-deploy/.env.example .env          # 首次配置
+#   docker compose -f synpharm-deploy/docker-compose.dev.yml up -d
+#
+# 热重载说明：
+#   - 后端：spring-boot-devtools 监听 target/classes 变更 → IDE 编译后自动重启
+#   - 算法：uvicorn --reload 监听源码变更 → 保存即重启
+#   - 前端：Vite HMR → 保存即热替换
+# =============================================================================
+
+name: synpharm-dev
+
+services:
+  # ---------------------------------------------------------------------------
+  # MySQL 8.0（数据库）
+  # ---------------------------------------------------------------------------
+  mysql:
+    image: mysql:8.0
+    container_name: synpharm-dev-mysql
+    environment:
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:?请在 .env 中设置 MYSQL_ROOT_PASSWORD}
+      MYSQL_DATABASE: ${MYSQL_DATABASE:-synpharm}
+      MYSQL_USER: ${MYSQL_USER:-synpharm}
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD:?请在 .env 中设置 MYSQL_PASSWORD}
+      # 供 sql/00_create_accounts.sh 建「每服务独立账号」（仅在数据卷为空时执行）
+      AUTH_DB_USER: ${AUTH_DB_USER:-synpharm_auth}
+      AUTH_DB_PASSWORD: ${AUTH_DB_PASSWORD:-}
+      # 2026-10-22 服务收敛：原 design/asset/platform 三个账号合并为一个 core 账号
+      CORE_DB_USER: ${CORE_DB_USER:-synpharm_core}
+      CORE_DB_PASSWORD: ${CORE_DB_PASSWORD:-}
+      PREDICT_DB_USER: ${PREDICT_DB_USER:-synpharm_predict}
+      PREDICT_DB_PASSWORD: ${PREDICT_DB_PASSWORD:-}
+    ports:
+      - "${MYSQL_PORT:-13307}:3306"
+    volumes:
+      - mysql_data:/var/lib/mysql
+      # 首次初始化自动执行 sql/ 下的建表脚本
+      - ./sql:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-u", "root", "-p${MYSQL_ROOT_PASSWORD}"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+    networks:
+      - synpharm-dev
+    restart: unless-stopped
+
+  # ---------------------------------------------------------------------------
+  # Redis 7（缓存 / 验证码 / Token 黑名单）
+  # ---------------------------------------------------------------------------
+  redis:
+    image: redis:7-alpine
+    container_name: synpharm-dev-redis
+    ports:
+      - "${REDIS_PORT:-6380}:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - synpharm-dev
+    restart: unless-stopped
+
+  # ---------------------------------------------------------------------------
+  # RabbitMQ 3.13（消息队列：批量任务异步调度）
+  # ---------------------------------------------------------------------------
+  rabbitmq:
+    image: rabbitmq:3.13-management-alpine
+    container_name: synpharm-dev-rabbitmq
+    environment:
+      RABBITMQ_DEFAULT_USER: ${RABBITMQ_USER:-synpharm}
+      RABBITMQ_DEFAULT_PASS: ${RABBITMQ_PASSWORD:?请在 .env 中设置 RABBITMQ_PASSWORD}
+    ports:
+      - "15672:15672"
+    volumes:
+      - rabbitmq_data:/var/lib/rabbitmq
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
+      interval: 20s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+    networks:
+      - synpharm-dev
+    restart: unless-stopped
+
+  # ---------------------------------------------------------------------------
+  # Nacos 2.4（注册中心 + 配置中心）
+  #
+  # 独立部署（embedded derby），无需额外 MySQL 库。
+  # 客户端版本：spring-cloud-alibaba 2023.0.3.4 内置 nacos-client 2.4.3，故服务端同版本。
+  # 控制台：http://localhost:${NACOS_PORT:-18848}/nacos  （默认 nacos / nacos）
+  # ---------------------------------------------------------------------------
+  nacos:
+    image: nacos/nacos-server:v2.4.3
+    container_name: synpharm-dev-nacos
+    environment:
+      MODE: standalone
+      PREFER_HOST_MODE: hostname
+      # 本地开发关闭鉴权；生产必须开启并配置 NACOS_AUTH_TOKEN / IDENTITY（见 docker-compose.yml）
+      NACOS_AUTH_ENABLE: "false"
+      JVM_XMS: 256m
+      JVM_XMX: 512m
+      JVM_XMN: 128m
+    ports:
+      # 宿主端口取 15000 以上：Windows 动态端口范围为 1024-15000
+      - "${NACOS_PORT:-18848}:8848"
+      # Nacos 2.x 的 gRPC 端口 = 主端口 + 1000，本机跑客户端时需可达
+      - "${NACOS_GRPC_PORT:-19848}:9848"
+    volumes:
+      - nacos_data:/home/nacos/data
+      - nacos_logs:/home/nacos/logs
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:8848/nacos/v1/console/health/readiness"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+      start_period: 60s
+    networks:
+      - synpharm-dev
+    restart: unless-stopped
+
+  # ---------------------------------------------------------------------------
+  # 【已退役】单体 synpharm-backend 服务（2026-10-16）
+  #
+  # 移除理由：单体已零端点、零 Mapper/Entity，只剩 11 个框架文件；其独占的 19 张设计域
+  # 镜像表已 DROP（synpharm 库现为 0 表），网关兜底路由也已删除。
+  # **源码目录已于 2026-10-19 从工作区删除**（备份见 _synpharm-backend-final-backup-20261019.zip）。
+  # 需要回滚时：解压备份 → 恢复本块 → 把网关 monolith 路由加回。
+  #
+  # 曾经的用途：宿主 8080 让给 gateway，本服务用 BACKEND_DIRECT_PORT(18081) 直连排查，
+  # 并用 5005 做远程调试 —— 该端口已落入 Windows 保留段（netsh 可查），本就绑不上。
+  # ---------------------------------------------------------------------------
+
+  # ---------------------------------------------------------------------------
+  # 多模块一次性构建（给 gateway / auth 共用）
+  #
+  # 为什么单独一个服务：synpharm-cloud 是挂载进容器的**同一份源码目录**，
+  # 如果 gateway 与 auth 各自跑 `mvn install`，两者会同时写 synpharm-common/target
+  # 并被彼此清空 → 构建随机失败。这里先构建安装一次（产物进共享的 /root/.m2），
+  # 之后各服务只在自己的模块目录里 `spring-boot:run`（会即时编译本模块源码）。
+  #
+  # 注意：改了 synpharm-common 的代码需要重跑本服务：
+  #   docker compose ... run --rm mvn-setup
+  # ---------------------------------------------------------------------------
+  mvn-setup:
+    image: maven:3.9.6-eclipse-temurin-17
+    container_name: synpharm-dev-mvn-setup
+    working_dir: /app
+    # 必须带 clean：宿主 VS Code 的 Java 语言服务器会用 ECJ 重编译并直接覆盖共享的
+    # target/classes，其产物可能出现非法的方法 Code 长度。若这里只跑 install，
+    # maven 会按时间戳认为"已是最新"而跳过编译，直接把**坏的 class 打进 m2 的 jar**，
+    # 之后所有服务都起不来（问题总账 H-22）。clean 强制 javac 全量重编译。
+    command: mvn -B -q -DskipTests clean install
+    volumes:
+      - ../synpharm-cloud:/app
+      - maven_cache:/root/.m2
+    networks:
+      - synpharm-dev
+    restart: "no"
+
+  # ---------------------------------------------------------------------------
+  # 身份与访问服务（阶段 1 抽出）
+  #
+  # 拥有 synpharm_auth schema；用独立账号连接，只能看见自己的两张表。
+  # 鉴权由网关注入，本服务只校验「请求是否真的来自网关」（X-Internal-Token）。
+  # ---------------------------------------------------------------------------
+  auth:
+    image: maven:3.9.6-eclipse-temurin-17
+    container_name: synpharm-dev-auth
+    working_dir: /app/synpharm-auth
+    # 启动前先 clean：宿主 VS Code 的 Java 语言服务器会用 ECJ 重编译并直接覆盖共享的
+    # target/classes，其产物可能出现非法的方法 Code 长度（容器内报
+    # ClassFormatError: Invalid method Code length 0）；此时 maven 按时间戳判断会认为
+    # "已是最新"而跳过编译，服务于是在重启循环里永远起不来（问题总账 H-22）。
+    # clean 强制 javac 全量重编译，是这条链路的自愈手段。
+    command: mvn -B clean spring-boot:run
+    environment:
+      SERVER_PORT: 8081
+      NACOS_SERVER_ADDR: nacos:8848
+      NACOS_DISCOVERY_ENABLED: "true"
+      DB_HOST: mysql
+      DB_PORT: 3306
+      AUTH_DB_NAME: synpharm_auth
+      AUTH_DB_USER: ${AUTH_DB_USER:-synpharm_auth}
+      AUTH_DB_PASSWORD: ${AUTH_DB_PASSWORD:?请在 .env 中设置 AUTH_DB_PASSWORD}
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      REDIS_PASSWORD: ${REDIS_PASSWORD:-}
+      JWT_SECRET: ${JWT_SECRET:?请在 .env 中设置 JWT_SECRET}
+      JWT_EXPIRATION: ${JWT_EXPIRATION:-86400000}
+      INTERNAL_TOKEN: ${INTERNAL_TOKEN:?请在 .env 中设置 INTERNAL_TOKEN}
+      CAPTCHA_DEV_MODE: ${CAPTCHA_DEV_MODE:-true}
+      QQ_EMAIL: ${QQ_EMAIL:-}
+      QQ_EMAIL_AUTH_CODE: ${QQ_EMAIL_AUTH_CODE:-}
+    depends_on:
+      mysql:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      nacos:
+        condition: service_healthy
+      mvn-setup:
+        condition: service_completed_successfully
+    volumes:
+      - ../synpharm-cloud:/app
+      - maven_cache:/root/.m2
+    networks:
+      - synpharm-dev
+    restart: unless-stopped
+
+  # ---------------------------------------------------------------------------
+  # 主业务服务（2026-10-22 服务收敛）
+  # 由原 design(19表) + asset(1表) + platform(1表) 合并；schema 合并为 synpharm_core。
+  # 合并理由：主业务四段（需求分析/生成/编辑/决策）全在设计域，asset 与 platform
+  # 本就是它的支撑件。合并后消失了两件事：
+  #   1) design → platform 的唯一一次跨服务同步调用（ToolRegistryClient 已删，改进程内）
+  #   2) 网关必须把 platform-design-tools 排在 design 之前的隐式依赖
+  # 基础套件仍独立：gateway（网关）、auth（身份）、predict（预测域）。
+  # ---------------------------------------------------------------------------
+  core:
+    image: maven:3.9.6-eclipse-temurin-17
+    container_name: synpharm-dev-core
+    working_dir: /app/synpharm-core
+    # 启动前先 clean：宿主 VS Code 的 Java 语言服务器会用 ECJ 重编译并直接覆盖共享的
+    # target/classes，其产物可能出现非法的方法 Code 长度（容器内报
+    # ClassFormatError: Invalid method Code length 0）；此时 maven 按时间戳判断会认为
+    # "已是最新"而跳过编译，服务于是在重启循环里永远起不来（问题总账 H-22）。
+    # clean 强制 javac 全量重编译，是这条链路的自愈手段。
+    command: mvn -B clean spring-boot:run
+    environment:
+      SERVER_PORT: 8083
+      NACOS_SERVER_ADDR: nacos:8848
+      NACOS_DISCOVERY_ENABLED: "true"
+      DB_HOST: mysql
+      DB_PORT: 3306
+      CORE_DB_NAME: ${CORE_DB_NAME:-synpharm_core}
+      CORE_DB_USER: ${CORE_DB_USER:-synpharm_core}
+      CORE_DB_PASSWORD: ${CORE_DB_PASSWORD:?请在 .env 中设置 CORE_DB_PASSWORD}
+      INTERNAL_TOKEN: ${INTERNAL_TOKEN:?请在 .env 中设置 INTERNAL_TOKEN}
+      # 算法引擎：/api/system/algorithm-health 与 design_tool.available 探测（原 platform 职责）
+      FASTAPI_URL: ${FASTAPI_URL:-http://fastapi:8000}
+      FASTAPI_API_KEY: ${FASTAPI_API_KEY:-}
+      # MQ：容器内是服务名而不是 localhost，漏配会让队列声明全部失败（静默）
+      RABBITMQ_HOST: rabbitmq
+      RABBITMQ_PORT: 5672
+      RABBITMQ_USERNAME: ${RABBITMQ_USER:-synpharm}
+      RABBITMQ_PASSWORD: ${RABBITMQ_PASSWORD:?请在 .env 中设置 RABBITMQ_PASSWORD}
+    depends_on:
+      mysql:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+      nacos:
+        condition: service_healthy
+      mvn-setup:
+        condition: service_completed_successfully
+    volumes:
+      - ../synpharm-cloud:/app
+      - maven_cache:/root/.m2
+    networks:
+      - synpharm-dev
+    restart: unless-stopped
+
+  # ---------------------------------------------------------------------------
+  # 预测域（阶段 4：框架已就位，业务代码与数据表**尚未迁入** —— 它在单体里正在服务，
+  # 搬迁顺序必须是「先搬代码、再搬表」，详见 synpharm-predict 的启动类注释）
+  # ---------------------------------------------------------------------------
+  predict:
+    image: maven:3.9.6-eclipse-temurin-17
+    container_name: synpharm-dev-predict
+    working_dir: /app/synpharm-predict
+    # 启动前先 clean：宿主 VS Code 的 Java 语言服务器会用 ECJ 重编译并直接覆盖共享的
+    # target/classes，其产物可能出现非法的方法 Code 长度（容器内报
+    # ClassFormatError: Invalid method Code length 0）；此时 maven 按时间戳判断会认为
+    # "已是最新"而跳过编译，服务于是在重启循环里永远起不来（问题总账 H-22）。
+    # clean 强制 javac 全量重编译，是这条链路的自愈手段。
+    command: mvn -B clean spring-boot:run
+    environment:
+      SERVER_PORT: 8082
+      NACOS_SERVER_ADDR: nacos:8848
+      NACOS_DISCOVERY_ENABLED: "true"
+      DB_HOST: mysql
+      DB_PORT: 3306
+      PREDICT_DB_NAME: synpharm_predict
+      PREDICT_DB_USER: ${PREDICT_DB_USER:-synpharm_predict}
+      PREDICT_DB_PASSWORD: ${PREDICT_DB_PASSWORD:?请在 .env 中设置 PREDICT_DB_PASSWORD}
+      INTERNAL_TOKEN: ${INTERNAL_TOKEN:?请在 .env 中设置 INTERNAL_TOKEN}
+      RABBITMQ_HOST: rabbitmq
+      RABBITMQ_PORT: 5672
+      RABBITMQ_USERNAME: ${RABBITMQ_USER:-synpharm}
+      RABBITMQ_PASSWORD: ${RABBITMQ_PASSWORD:?请在 .env 中设置 RABBITMQ_PASSWORD}
+      # 外部抓取缓存与批量进度缓存（StringRedisTemplate）
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      REDIS_PASSWORD: ${REDIS_PASSWORD:-}
+      # 算法引擎（FastAPI）与外部数据源解析
+      FASTAPI_URL: ${FASTAPI_URL:-http://fastapi:8000}
+      FASTAPI_API_KEY: ${FASTAPI_API_KEY:-}
+      UNIPROT_BASE_URL: ${UNIPROT_BASE_URL:-https://rest.uniprot.org}
+      RCSB_BASE_URL: ${RCSB_BASE_URL:-https://data.rcsb.org}
+      # 批量上传的落盘目录（独立卷，不写进挂载的源码树）
+      FILE_UPLOAD_DIR: /data/uploads
+      FILE_RESULT_DIR: /data/results
+    depends_on:
+      mysql:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+      redis:
+        condition: service_started
+      nacos:
+        condition: service_healthy
+      mvn-setup:
+        condition: service_completed_successfully
+    volumes:
+      - ../synpharm-cloud:/app
+      - maven_cache:/root/.m2
+      - predict_data:/data
+    networks:
+      - synpharm-dev
+    restart: unless-stopped
+
+  # ---------------------------------------------------------------------------
+  # 网关（微服务唯一入口，宿主 8080）
+  # ---------------------------------------------------------------------------
+  gateway:
+    image: maven:3.9.6-eclipse-temurin-17
+    container_name: synpharm-dev-gateway
+    working_dir: /app/synpharm-gateway
+    # 启动前先 clean：宿主 VS Code 的 Java 语言服务器会用 ECJ 重编译并直接覆盖共享的
+    # target/classes，其产物可能出现非法的方法 Code 长度（容器内报
+    # ClassFormatError: Invalid method Code length 0）；此时 maven 按时间戳判断会认为
+    # "已是最新"而跳过编译，服务于是在重启循环里永远起不来（问题总账 H-22）。
+    # clean 强制 javac 全量重编译，是这条链路的自愈手段。
+    command: mvn -B clean spring-boot:run
+    environment:
+      SERVER_PORT: 8080
+      NACOS_SERVER_ADDR: nacos:8848
+      NACOS_DISCOVERY_ENABLED: "true"
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      REDIS_PASSWORD: ${REDIS_PASSWORD:-}
+      JWT_SECRET: ${JWT_SECRET:?请在 .env 中设置 JWT_SECRET}
+      JWT_EXPIRATION: ${JWT_EXPIRATION:-86400000}
+      INTERNAL_TOKEN: ${INTERNAL_TOKEN:?请在 .env 中设置 INTERNAL_TOKEN}
+      # 阶段 1：网关是唯一鉴权点（默认已是 true，此处显式声明便于对照）
+      GATEWAY_AUTH_ENFORCE: "true"
+      # 单体已改读内部身份头，不再需要 Authorization
+      GATEWAY_FORWARD_AUTHORIZATION: "false"
+      # CORS：单体退役后下游已无任何 CORS 配置，浏览器跨域直连网关（前端 dev 5174 → 8080）
+      # 的预检会拿到 403 且无 Access-Control-Allow-Origin。故默认开启，由网关统一收敛。
+      GATEWAY_CORS_ENABLED: "${GATEWAY_CORS_ENABLED:-true}"
+    ports:
+      - "${BACKEND_PORT:-8080}:8080"
+    depends_on:
+      nacos:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      mvn-setup:
+        condition: service_completed_successfully
+    volumes:
+      - ../synpharm-cloud:/app
+      - maven_cache:/root/.m2
+    networks:
+      - synpharm-dev
+    restart: unless-stopped
+
+  # ---------------------------------------------------------------------------
+  # FastAPI 算法引擎（uvicorn --reload 源码热重载）
+  #
+  # 复用生产 Dockerfile 构建依赖层（PyTorch 等），挂载源码覆盖 /app。
+  # --reload 监听 /app 下的 .py 变更，保存即重启。
+  # ---------------------------------------------------------------------------
+  fastapi:
+    build:
+      context: ../synpharm-fastapi
+    image: synpharm/fastapi:dev
+    container_name: synpharm-dev-fastapi
+    user: root
+    command: uvicorn main:app --host 0.0.0.0 --port 8000 --reload --reload-dir /app
+    environment:
+      MODEL_DIR: /app/models
+      DEVICE: ${FASTAPI_DEVICE:-cpu}
+      BATCH_SIZE: ${FASTAPI_BATCH_SIZE:-50}
+      API_KEYS: ${FASTAPI_API_KEYS:-${FASTAPI_API_KEY:-}}
+      LOG_LEVEL: ${FASTAPI_LOG_LEVEL:-DEBUG}
+    ports:
+      - "${FASTAPI_PORT:-18050}:8000"
+    volumes:
+      - ../synpharm-fastapi:/app
+      - fastapi_logs:/app/logs
+    networks:
+      - synpharm-dev
+    restart: unless-stopped
+
+  # ---------------------------------------------------------------------------
+  # 前端（Vite Dev Server + HMR）
+  #
+  # 不构建镜像，直接用 Node 官方镜像挂载源码运行。
+  # VITE_PROXY_TARGET 指向网关（而非后端）：/api 先经网关，再由网关路由到具体服务。
+  # ---------------------------------------------------------------------------
+  frontend:
+    image: node:20-alpine
+    container_name: synpharm-dev-frontend
+    working_dir: /app
+    command: sh -c "npm install && npm run dev -- --host 0.0.0.0"
+    environment:
+      VITE_PROXY_TARGET: http://gateway:8080
+      VITE_API_BASE_URL: ""
+    ports:
+      - "${FRONTEND_DEV_PORT:-5174}:5174"
+    depends_on:
+      - gateway
+    volumes:
+      - ../synpharm-frontend:/app
+      - frontend_node_modules:/app/node_modules
+    networks:
+      - synpharm-dev
+    restart: unless-stopped
+
+# -----------------------------------------------------------------------------
+# 网络与数据卷
+# -----------------------------------------------------------------------------
+networks:
+  synpharm-dev:
+    driver: bridge
+
+volumes:
+  mysql_data:
+  redis_data:
+  rabbitmq_data:
+  nacos_data:
+  nacos_logs:
+  maven_cache:
+  # 批量上传/结果文件的持久化目录（predict 服务直读本地卷；方案 C-4 收归 asset 后即可删）
+  predict_data:
+  fastapi_logs:
+  frontend_node_modules:

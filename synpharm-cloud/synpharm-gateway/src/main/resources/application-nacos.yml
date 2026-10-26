@@ -1,0 +1,37 @@
+# =============================================================================
+# Nacos 配置中心（可选 profile）
+#
+# 启用方式：--spring.profiles.active=nacos  或  SPRING_PROFILES_ACTIVE=nacos
+#
+# 为什么做成 profile 而不是默认开启：
+#   spring.config.import 在 Nacos 不可达时会直接导致启动失败。做成 profile 后，
+#   默认 profile 只依赖 Nacos 做服务发现（注册失败不阻断），配置中心按需启用。
+#
+# 配置组织约定（方案 §10.3）：
+#   namespace  synpharm-{dev|test|prod}
+#   group      DEFAULT_GROUP
+#   共享配置   synpharm-common.yaml
+#   各自配置   synpharm-gateway.yaml
+#   敏感项     JWT_SECRET / DB_PASSWORD / FASTAPI_API_KEY 继续走环境变量，不进 Nacos
+# =============================================================================
+
+spring:
+  config:
+    import:
+      # optional: 前缀 = 该 dataId 不存在时不报错，便于逐步迁移配置
+      - optional:nacos:${spring.application.name}.yaml
+      - optional:nacos:synpharm-common.yaml
+  cloud:
+    nacos:
+      config:
+        server-addr: ${NACOS_SERVER_ADDR:localhost:8848}
+        username: ${NACOS_USERNAME:nacos}
+        password: ${NACOS_PASSWORD:nacos}
+        namespace: ${NACOS_NAMESPACE:}
+        group: ${NACOS_GROUP:DEFAULT_GROUP}
+        file-extension: yaml
+        refresh-enabled: true
+
+logging:
+  level:
+    com.alibaba.cloud.nacos: info

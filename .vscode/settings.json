@@ -1,0 +1,10 @@
+{
+    "java.configuration.updateBuildConfiguration": "interactive",
+    // 关键：本仓库的 target/ 目录被 docker compose 里的服务直接共享（各服务用
+    // spring-boot:run 从 target/classes 启动）。Java 语言服务器默认会自动重编译并
+    // 覆盖 target/classes，其 ECJ 产物曾多次出现非法的方法 Code 长度，导致容器内
+    // 报 ClassFormatError: Invalid method Code length 0 且服务起不来（问题总账 H-22）。
+    // 关掉自动构建即切断污染源；代价是语言服务器不再给出编译期错误提示
+    // —— 编译与验证请以容器内的 mvn clean test 为准。
+    "java.autobuild.enabled": false
+}
