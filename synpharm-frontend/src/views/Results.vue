@@ -17,17 +17,8 @@
           class="rs__search"
           placeholder="搜索靶点名称、ID..."
         />
-        <select v-model="filters.confidence" class="rs__select">
-          <option value="all">所有置信度</option>
-          <option value="high">高</option>
-          <option value="medium">中</option>
-          <option value="low">低</option>
-        </select>
-        <select v-model="filters.sortBy" class="rs__select">
-          <option value="date">按日期</option>
-          <option value="affinity">按亲和力</option>
-          <option value="confidence">按置信度</option>
-        </select>
+        <SpSelect v-model="filters.confidence" :min-width="150" :options="CONFIDENCE_OPTIONS" />
+        <SpSelect v-model="filters.sortBy" :min-width="150" :options="SORT_OPTIONS" />
       </section>
 
       <section class="rs__list">
@@ -62,6 +53,7 @@ import { useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { resultApi } from '@/api/predict'
 import Sidebar from '@/components/Sidebar.vue'
+import SpSelect from '@/components/ui/SpSelect.vue'
 import ResultCard from '@/components/ResultCard.vue'
 import type { PredictionResult } from '@/types'
 
@@ -70,6 +62,19 @@ const filters = reactive({
   search: '',
   sortBy: 'date'
 })
+
+const CONFIDENCE_OPTIONS = [
+  { value: 'all', label: '所有置信度' },
+  { value: 'high', label: '高' },
+  { value: 'medium', label: '中' },
+  { value: 'low', label: '低' }
+]
+
+const SORT_OPTIONS = [
+  { value: 'date', label: '按日期' },
+  { value: 'affinity', label: '按亲和力' },
+  { value: 'confidence', label: '按置信度' }
+]
 
 const results = ref<PredictionResult[]>([])
 const loading = ref(false)

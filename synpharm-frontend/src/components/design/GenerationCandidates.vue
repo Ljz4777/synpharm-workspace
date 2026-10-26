@@ -11,17 +11,21 @@
       <div class="logs__filters">
         <label class="field">
           <span class="field__label">阶段</span>
-          <select v-model="stage" class="field__control" @change="reload">
-            <option value="">全部</option>
-            <option v-for="opt in STAGE_OPTIONS" :key="opt.value" :value="opt.value">{{ opt.label }}</option>
-          </select>
+          <SpSelect
+            v-model="stage"
+            block
+            :options="stageSelectOptions"
+            @change="reload"
+          />
         </label>
         <label class="field">
           <span class="field__label">结局</span>
-          <select v-model="outcome" class="field__control" @change="reload">
-            <option value="">全部</option>
-            <option v-for="opt in OUTCOME_OPTIONS" :key="opt.value" :value="opt.value">{{ opt.label }}</option>
-          </select>
+          <SpSelect
+            v-model="outcome"
+            block
+            :options="outcomeSelectOptions"
+            @change="reload"
+          />
         </label>
         <button type="button" class="btn" :disabled="loading" @click="reload">
           {{ loading ? '加载中…' : '刷新' }}
@@ -96,6 +100,7 @@
 import { onMounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import EmptyState from '@/components/ui/EmptyState.vue'
+import SpSelect from '@/components/ui/SpSelect.vue'
 import { generationApi, filterReasonLabel, parseFilterReasons } from '@/api/generation'
 import type { FilterReasonItem, GenerationCandidateLog } from '@/api/generation'
 import type { ApiError } from '@/utils/request'
@@ -122,6 +127,9 @@ const OUTCOME_OPTIONS = [
   { value: 'MERGED', label: '合并' },
   { value: 'QUOTA_CUT', label: '配额裁掉' }
 ] as const
+
+const stageSelectOptions = [{ value: '', label: '全部阶段' }, ...STAGE_OPTIONS]
+const outcomeSelectOptions = [{ value: '', label: '全部去向' }, ...OUTCOME_OPTIONS]
 
 const rows = ref<GenerationCandidateLog[]>([])
 const loading = ref(false)

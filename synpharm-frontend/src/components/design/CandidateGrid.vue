@@ -10,21 +10,18 @@
         @keyup.enter="applyKeyword"
       />
 
-      <select v-model="originType" class="cg__select" @change="applyFilters">
-        <option value="">全部来源</option>
-        <option value="GENERATED">生成</option>
-        <option value="EDITED">编辑衍生</option>
-        <option value="IMPORTED">导入</option>
-      </select>
-
-      <select v-model="reviewStatus" class="cg__select" @change="applyFilters">
-        <option value="">全部状态</option>
-        <option value="TOP">优选</option>
-        <option value="QUALIFIED">合格</option>
-        <option value="NEW">待评</option>
-        <option value="REJECTED">已淘汰</option>
-      </select>
-
+      <SpSelect
+        v-model="originType"
+        
+        :options="ORIGIN_OPTIONS"
+        @change="applyFilters"
+      />
+      <SpSelect
+        v-model="reviewStatus"
+        
+        :options="REVIEW_OPTIONS"
+        @change="applyFilters"
+      />
       <span class="cg__spacer" />
 
       <span class="cg__count">
@@ -98,11 +95,13 @@
     <!-- 分页 -->
     <div class="cg__footer">
       <span class="cg__page-size">每页
-        <select v-model.number="pageSize" class="cg__select cg__select--sm" @change="changePageSize">
-          <option :value="20">20</option>
-          <option :value="50">50</option>
-          <option :value="100">100</option>
-        </select>
+        <SpSelect
+          v-model.number="pageSize"
+          size="sm"
+          
+          :options="PAGE_SIZE_OPTIONS"
+          @change="changePageSize"
+        />
         条
       </span>
       <span class="cg__spacer" />
@@ -121,7 +120,29 @@
  * 因此换成真实后端时本组件无需改动。
  */
 import { computed, ref, watch } from 'vue'
+import SpSelect from '@/components/ui/SpSelect.vue'
 import type { CandidateQuery, DesignCandidate, MoleculeOriginType, ReviewStatus } from '@/types/design'
+
+const ORIGIN_OPTIONS = [
+  { value: '', label: '全部来源' },
+  { value: 'GENERATED', label: '生成' },
+  { value: 'EDITED', label: '编辑衍生' },
+  { value: 'IMPORTED', label: '导入' }
+]
+
+const REVIEW_OPTIONS = [
+  { value: '', label: '全部状态' },
+  { value: 'TOP', label: '优选' },
+  { value: 'QUALIFIED', label: '合格' },
+  { value: 'NEW', label: '待评' },
+  { value: 'REJECTED', label: '已淘汰' }
+]
+
+const PAGE_SIZE_OPTIONS = [
+  { value: 20, label: '20 条/页' },
+  { value: 50, label: '50 条/页' },
+  { value: 100, label: '100 条/页' }
+]
 
 const props = defineProps<{
   rows: DesignCandidate[]

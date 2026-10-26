@@ -4,16 +4,12 @@
     <div class="rc__toolbar">
       <div class="rc__pick">
         <span class="rc__pick-label">基准轮次</span>
-        <select v-model.number="baseRoundId" class="rc__select">
-          <option v-for="r in rounds" :key="r.id" :value="r.id">{{ r.name }}</option>
-        </select>
+        <SpSelect v-model.number="baseRoundId"  :options="roundSelectOptions" />
       </div>
       <span class="rc__arrow">→</span>
       <div class="rc__pick">
         <span class="rc__pick-label">对比轮次</span>
-        <select v-model.number="targetRoundId" class="rc__select">
-          <option v-for="r in rounds" :key="r.id" :value="r.id">{{ r.name }}</option>
-        </select>
+        <SpSelect v-model.number="targetRoundId"  :options="roundSelectOptions" />
       </div>
       <span class="rc__spacer" />
       <span class="rc__hint">{{ loading ? '统计中…' : `共 ${rounds.length} 个轮次` }}</span>
@@ -87,6 +83,7 @@
  */
 import { computed, onBeforeUnmount, onMounted, ref, shallowRef, watch } from 'vue'
 import * as echarts from 'echarts'
+import SpSelect from '@/components/ui/SpSelect.vue'
 import { designApi } from '@/api/design'
 import { useDesignStore } from '@/stores/design'
 import type { DesignCandidate, DesignRound } from '@/types/design'
@@ -96,6 +93,10 @@ const store = useDesignStore()
 const rounds = computed<DesignRound[]>(() => store.rounds)
 const baseRoundId = ref(0)
 const targetRoundId = ref(0)
+
+const roundSelectOptions = computed(() =>
+  rounds.value.map((r) => ({ value: r.id, label: r.name }))
+)
 const loading = ref(false)
 
 /** 两个轮次的候选（用于统计与流向） */

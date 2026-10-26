@@ -45,35 +45,37 @@
         <section class="picker">
           <label class="field">
             <span class="field__label">项目</span>
-            <select v-model.number="projectId" class="field__control" @change="onProjectChange">
-              <option :value="0" disabled>— 选择项目 —</option>
-              <option v-for="p in projects" :key="p.id" :value="p.id">{{ p.name }}</option>
-            </select>
+            <SpSelect
+              v-model.number="projectId"
+              block
+              :options="projectSelectOptions"
+              placeholder="— 选择项目 —"
+              @change="onProjectChange"
+            />
           </label>
 
           <label class="field">
             <span class="field__label">生成批次</span>
-            <select v-model.number="runId" class="field__control" :disabled="!runs.length" @change="onRunChange">
-              <option :value="0" disabled>— 选择批次 —</option>
-              <option v-for="r in runs" :key="r.id" :value="r.id">
-                {{ r.runNo }} · {{ statusLabel(r.status) }} · {{ r.strategy }}
-              </option>
-            </select>
+            <SpSelect
+              v-model.number="runId"
+              block
+              :options="runSelectOptions"
+              placeholder="— 选择批次 —"
+              :disabled="!runs.length"
+              @change="onRunChange"
+            />
           </label>
 
           <label class="field">
             <span class="field__label">候选（配额保留 + 画布新建）</span>
-            <select
+            <SpSelect
               v-model.number="candidateId"
-              class="field__control"
+              block
+              :options="candidateSelectOptions"
+              placeholder="— 选择候选 —"
               :disabled="!pickerItems.length"
               @change="onCandidateChange"
-            >
-              <option :value="0" disabled>— 选择候选 —</option>
-              <option v-for="k in pickerItems" :key="k.candidateId" :value="k.candidateId">
-                #{{ k.candidateId }}　{{ shortSmiles(k.smiles) }}
-              </option>
-            </select>
+            />
           </label>
 
           <span class="picker__meta">
@@ -343,6 +345,7 @@ import { computed, onMounted, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import Sidebar from '@/components/Sidebar.vue'
 import PageHeader from '@/components/ui/PageHeader.vue'
+import SpSelect from '@/components/ui/SpSelect.vue'
 import FlowSteps from '@/components/design/FlowSteps.vue'
 import MoleculeEditor from '@/components/design/MoleculeEditor.vue'
 import EvaluationFreezePanel from '@/components/design/EvaluationFreezePanel.vue'
@@ -398,6 +401,24 @@ const pickerItems = computed<Array<{ candidateId: number; smiles: string }>>(() 
   }
   return out
 })
+
+const projectSelectOptions = computed(() =>
+  projects.value.map((p) => ({ value: p.id, label: p.name }))
+)
+
+const runSelectOptions = computed(() =>
+  runs.value.map((r) => ({
+    value: r.id,
+    label: `${r.runNo} · ${statusLabel(r.status)} · ${r.strategy}`
+  }))
+)
+
+const candidateSelectOptions = computed(() =>
+  pickerItems.value.map((k) => ({
+    value: k.candidateId,
+    label: `#${k.candidateId}　${shortSmiles(k.smiles)}`
+  }))
+)
 
 const freeze = ref<EvaluationFreeze | null>(null)
 const freezing = ref(false)

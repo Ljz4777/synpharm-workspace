@@ -3,11 +3,7 @@
     <!-- ==================== 工具条 ==================== -->
     <div class="pv__toolbar">
       <span class="pv__label">结合口袋</span>
-      <select v-model.number="pocketId" class="pv__select">
-        <option v-for="p in pockets" :key="p.id" :value="p.id">
-          {{ targetLabelOf(p.targetId) }} · 口袋 {{ p.pocketNo }} · {{ p.structureRef }}
-        </option>
-      </select>
+      <SpSelect v-model.number="pocketId" :min-width="250" :options="pocketSelectOptions" />
 
       <button
         type="button"
@@ -179,6 +175,7 @@
  *   - 结构切换后 Mol* 会重建场景，需要把当前 UI 状态重新同步一次
  */
 import { computed, defineAsyncComponent, nextTick, ref } from 'vue'
+import SpSelect from '@/components/ui/SpSelect.vue'
 import { useDesignStore } from '@/stores/design'
 import type { ProjectTargetRole } from '@/types/design'
 import {
@@ -271,6 +268,14 @@ function targetLabelOf(targetId: number): string {
   if (!target) return `靶点 ${targetId}`
   return `${target.chineseName || target.name}（${ROLE_LABEL[target.role]}）`
 }
+
+const pocketSelectOptions = computed(() =>
+  pockets.value.map((p) => ({
+    value: p.id,
+    label: `口袋 ${p.pocketNo} · ${p.structureRef}`,
+    hint: targetLabelOf(p.targetId)
+  }))
+)
 
 const statusText = computed(() => {
   if (!pocket.value) return '无口袋数据'

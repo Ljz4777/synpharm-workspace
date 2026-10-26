@@ -16,10 +16,7 @@
     <div class="config__grid">
       <label class="field">
         <span class="field__label">来源形态</span>
-        <select v-model="mode" class="field__control">
-          <option value="smiles">小分子（SMILES，导入筛选）</option>
-          <option value="sequence">抗体序列（单点突变）</option>
-        </select>
+        <SpSelect v-model="mode" block :options="MODE_OPTIONS" />
       </label>
 
       <label class="field">
@@ -84,6 +81,7 @@
 
 <script setup lang="ts">
 import { computed, ref } from 'vue'
+import SpSelect from '@/components/ui/SpSelect.vue'
 import type { GenerationCreateRequest, GenerationSeedInput } from '@/api/generation'
 
 /**
@@ -106,6 +104,11 @@ const emit = defineEmits<{
 }>()
 
 const mode = ref<'smiles' | 'sequence'>('smiles')
+
+const MODE_OPTIONS = [
+  { value: 'smiles', label: '小分子（SMILES，导入筛选）' },
+  { value: 'sequence', label: '抗体序列（单点突变）' }
+]
 const seed = ref<number | undefined>(undefined)
 const idempotencyKey = ref('')
 const smilesText = ref('')

@@ -4,12 +4,12 @@
     <div class="mc__pickers">
       <div class="mc__pick">
         <span class="mc__pick-label">A</span>
-        <select v-model.number="aId" class="mc__select">
-          <option :value="0" disabled>选择分子…</option>
-          <option v-for="c in candidates" :key="c.id" :value="c.id">
-            {{ c.displayName || c.id }} · {{ c.compositeScore.toFixed(1) }}
-          </option>
-        </select>
+        <SpSelect
+          v-model.number="aId"
+          :width="220"
+          :options="candidateSelectOptions"
+          placeholder="选择分子…"
+        />
       </div>
 
       <button
@@ -24,12 +24,12 @@
 
       <div class="mc__pick">
         <span class="mc__pick-label">B</span>
-        <select v-model.number="bId" class="mc__select">
-          <option :value="0" disabled>选择分子…</option>
-          <option v-for="c in candidates" :key="c.id" :value="c.id">
-            {{ c.displayName || c.id }} · {{ c.compositeScore.toFixed(1) }}
-          </option>
-        </select>
+        <SpSelect
+          v-model.number="bId"
+          :width="220"
+          :options="candidateSelectOptions"
+          placeholder="选择分子…"
+        />
       </div>
 
       <span class="mc__spacer" />
@@ -121,6 +121,7 @@
  * 当前先给出「并排结构式 + 逐项指标差值」，这两项已能支撑绝大多数判断。
  */
 import { computed, onMounted, reactive, ref, watch } from 'vue'
+import SpSelect from '@/components/ui/SpSelect.vue'
 import { designApi } from '@/api/design'
 import { useDesignStore } from '@/stores/design'
 import type { DesignCandidate, MetricDefinition, MoleculeMetrics } from '@/types/design'
@@ -139,6 +140,13 @@ const candidates = ref<DesignCandidate[]>([])
 // 初始置 0（未选择），由 onMounted 赋实际值 —— 使 watch 必定触发一次
 const aId = ref(0)
 const bId = ref(0)
+
+const candidateSelectOptions = computed(() =>
+  candidates.value.map((c) => ({
+    value: c.id,
+    label: `${c.displayName || c.id} · ${(c.compositeScore ?? 0).toFixed(1)}`
+  }))
+)
 
 interface SideState {
   candidate: DesignCandidate | null

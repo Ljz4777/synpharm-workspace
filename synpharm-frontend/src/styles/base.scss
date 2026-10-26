@@ -286,6 +286,71 @@ samp {
   }
 }
 
+// ---------------------------------------------------------------------------
+// 7.1 原生下拉框（兜底）
+//
+// 站内所有下拉框已换成 `components/ui/SpSelect.vue` —— 原生 `<select>` 的箭头和
+// 展开列表都由操作系统绘制，改不了行高、圆角、hover 与勾选标记，与这套扁平青绿
+// 主题始终对不上。
+//
+// 这段保留为兜底：将来若有第三方片段或临时调试代码直接写 `<select>`，
+// 至少它还是主题内的样子，而不是 Windows 灰凸控件。
+// ---------------------------------------------------------------------------
+$select-chevron: url("data:image/svg+xml;charset=utf-8,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6' viewBox='0 0 10 6'%3E%3Cpath d='M1 1l4 4 4-4' fill='none' stroke='%238ba1a3' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+
+select {
+  appearance: none;
+  -webkit-appearance: none;
+  height: 32px;
+  padding: 0 10px;
+  border: 1px solid $color-border;
+  border-radius: $radius-control;
+  background-color: $color-surface;
+  background-image: $select-chevron !important;
+  background-repeat: no-repeat !important;
+  background-position: right 9px center !important;
+  background-size: 10px 6px !important;
+  // 给箭头让位；页面用 padding 简写时会重置它，所以要抬一手
+  padding-right: 26px !important;
+  font-family: inherit;
+  font-size: $font-size-sm;
+  color: $color-text;
+  cursor: pointer;
+  transition: border-color $transition-fast, box-shadow $transition-fast;
+
+  &:hover:not(:disabled) {
+    border-color: rgba($accent-color, 0.55);
+  }
+
+  &:focus-visible,
+  &:focus {
+    outline: none;
+    border-color: $color-brand;
+    box-shadow: $shadow-focus;
+  }
+
+  &:disabled {
+    opacity: 0.55;
+    background-color: $color-surface-sunken;
+    cursor: not-allowed;
+  }
+
+  // 展开后的选项列表受系统控制，能设的只有配色
+  option {
+    background: $color-surface;
+    color: $color-text;
+  }
+
+  // 多选时不该有下拉箭头
+  &[multiple],
+  &[size]:not([size='1']) {
+    height: auto;
+    padding-right: $spacing-sm !important;
+    background-image: none !important;
+    cursor: default;
+  }
+}
+
 .banner {
   margin: 0;
   padding: 10px 14px;

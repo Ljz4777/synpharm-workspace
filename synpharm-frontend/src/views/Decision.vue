@@ -43,16 +43,13 @@
           <span class="status__text">{{ statusText }}</span>
         </div>
         <div class="status__meta">
-          <select
+          <SpSelect
             v-if="decisions.length > 1"
-            :value="currentId"
-            class="status__select"
-            @change="selectDecision(Number(($event.target as HTMLSelectElement).value))"
-          >
-            <option v-for="d in decisions" :key="d.id" :value="d.id">
-              {{ d.decisionNo }} · {{ labelOf(DECISION_STATUS_LABEL, d.status) }}
-            </option>
-          </select>
+            :model-value="currentId"
+            size="sm"
+            :options="decisionSelectOptions"
+            @change="selectDecision(Number($event))"
+          />
           <span v-else-if="decision">{{ decision.decisionNo }}</span>
         </div>
       </section>
@@ -416,16 +413,19 @@
           <div class="form">
             <label class="field">
               <span class="field__label">规则类型</span>
-              <select v-model="ruleForm.ruleCode" class="field__control">
-                <option v-for="(label, code) in VETO_RULE_LABEL" :key="code" :value="code">{{ label }}</option>
-              </select>
+              <SpSelect
+                v-model="ruleForm.ruleCode"
+                block
+                :options="ruleCodeOptions"
+              />
             </label>
             <label class="field">
               <span class="field__label">严重度</span>
-              <select v-model="ruleForm.severity" class="field__control">
-                <option value="BLOCK">一票否决（BLOCK）</option>
-                <option value="WARN">告警（WARN）</option>
-              </select>
+              <SpSelect
+                v-model="ruleForm.severity"
+                block
+                :options="RULE_SEVERITY_OPTIONS"
+              />
             </label>
             <label class="field field--wide">
               <span class="field__label">判定说明 *</span>
@@ -479,16 +479,11 @@
         </p>
         <label class="field">
           <span class="field__label">调整成 *</span>
-          <select v-model="form.outcome" class="field__control">
-            <option
-              v-for="o in OUTCOME_OPTIONS"
-              :key="o"
-              :value="o"
-              :disabled="!overridableTo(o)"
-            >
-              {{ labelOf(OUTCOME_LABEL, o) }}{{ overridableTo(o) ? '' : '（该候选不允许）' }}
-            </option>
-          </select>
+          <SpSelect
+            v-model="form.outcome"
+            block
+            :options="outcomeOptionsForCandidate"
+          />
         </label>
       </template>
 
@@ -569,6 +564,7 @@ import { useRoute } from 'vue-router'
 import Sidebar from '@/components/Sidebar.vue'
 import PageHeader from '@/components/ui/PageHeader.vue'
 import EmptyState from '@/components/ui/EmptyState.vue'
+import SpSelect from '@/components/ui/SpSelect.vue'
 import FlowSteps from '@/components/design/FlowSteps.vue'
 import { decisionApi, decisionVetoRuleApi } from '@/api/decision'
 import type {
@@ -607,6 +603,14 @@ const decisions = ref<Decision[]>([])
 const decision = ref<Decision | null>(null)
 const currentId = ref(0)
 const rules = ref<DecisionVetoRule[]>([])
+
+/** 决策轮次切换下拉 */
+const decisionSelectOptions = computed(() =>
+  decisions.value.map((d) => ({
+    value: d.id,
+    label: `${d.decisionNo} · ${labelOf(DECISION_STATUS_LABEL, d.status)}`
+  }))
+)
 
 const tab = ref<'overview' | 'vetoes' | 'replay' | 'rules'>('overview')
 
@@ -906,6 +910,20 @@ const MODAL_PLACEHOLDER: Record<ModalKind, string> = {
 
 const OUTCOME_OPTIONS = ['SELECTED', 'BACKUP', 'DEFERRED', 'REJECTED']
 
+/**
+ * 调整去向的选项。不允许的去向仍然列出来但禁用并说明原因 ——
+ * 直接隐藏会让用户以为「系统没有这个功能」，而禁用能讲清「为什么不行」。
+ */
+const outcomeOptionsForCandidate = computed(() =>
+  OUTCOME_OPTIONS.map((o) => ({
+    value: o,
+    label: overridableTo(o)
+      ? labelOf(OUTCOME_LABEL, o)
+      : `${labelOf(OUTCOME_LABEL, o)}（该候选不允许）`,
+    disabled: !overridableTo(o)
+  }))
+)
+
 function openModal(kind: ModalKind) {
   modal.value = { kind, busy: false, error: '' }
   form.value = { outcome: 'SELECTED', reason: '' }
@@ -1028,6 +1046,15 @@ const ruleForm = ref<{ ruleCode: string; severity: string; humanReadable: string
   humanReadable: '',
   thresholdNum: null
 })
+
+const ruleCodeOptions = computed(() =>
+  Object.entries(VETO_RULE_LABEL).map(([value, label]) => ({ value, label }))
+)
+
+const RULE_SEVERITY_OPTIONS = [
+  { value: 'BLOCK', label: '一票否决（BLOCK）' },
+  { value: 'WARN', label: '告警（WARN）' }
+]
 
 function toRuleBody(r: DecisionVetoRule): DecisionVetoRuleRequest {
   return {

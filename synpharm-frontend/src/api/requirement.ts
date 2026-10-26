@@ -173,6 +173,59 @@ export interface ProjectBrief {
   createdAt?: string
 }
 
+/**
+ * 约束规则（基线块4/5 的写入位）。
+ *
+ * `params` 的形状随 `ruleType` 而定，由后端 `ConstraintRuleValidator` 判定；
+ * `humanReadable` 是红线 R2 的落地：「不存在用户看不到的规则」，所以必填。
+ */
+export interface ConstraintRule {
+  id?: number
+  groupKey?: string | null
+  groupLogic?: string | null
+  ruleType: string
+  severity: 'HARD' | 'SOFT'
+  weight?: number | null
+  params?: Record<string, unknown>
+  dimension?: string | null
+  operator?: string | null
+  thresholdNum?: number | null
+  thresholdMax?: number | null
+  unit?: string | null
+  humanReadable?: string | null
+  sortNo?: number | null
+  enabled?: boolean
+}
+
+/** 约束集（版本化的规则集合；激活后才进入基线） */
+export interface ConstraintSet {
+  id: number
+  setId?: number
+  setNo?: string
+  name: string
+  description?: string | null
+  logic?: string
+  status: 'DRAFT' | 'ACTIVE' | 'ARCHIVED' | string
+  version?: number
+  parentId?: number | null
+  rules: ConstraintRule[]
+}
+
+export interface ConstraintSetUpsert {
+  name: string
+  description?: string
+  rules?: ConstraintRule[]
+  version?: number
+}
+
+/** 项目内绑定靶点（主靶点恰好一个，由后端校验） */
+export interface ProjectTargetBind {
+  targetId: number
+  role?: string
+  isPrimary?: boolean
+  sortNo?: number
+}
+
 /** 知识库条目（驱动 MOA / 分子形式下拉） */
 export interface LibraryItem {
   id: number
@@ -289,7 +342,33 @@ export const requirementApi = {
 
   /** 配额与作用机制走项目编辑接口（PATCH：给出才改） */
   patchProject: (projectId: number, body: ProjectQuotaPatch) =>
-    request.patch<{ id: number }>(base(projectId), body)
+    request.patch<{ id: number }>(base(projectId), body),
+
+  /* ----------------------- 靶点绑定（基线块2/3） ----------------------- */
+
+  bindTarget: (projectId: number, body: ProjectTargetBind) =>
+    request.post<{ id: number }>(`${base(projectId)}/targets`, body),
+
+  unbindTarget: (projectId: number, targetId: number) =>
+    request.delete<void>(`${base(projectId)}/targets/${targetId}`),
+
+  /* ----------------------- 约束集（基线块4/5） ----------------------- */
+
+  /** 当前生效约束集；未绑定时返回 null */
+  getConstraints: (projectId: number) =>
+    request.get<ConstraintSet | null>(`${base(projectId)}/constraints`),
+
+  /**
+   * 新建约束集（DRAFT）。
+   * 注意：已 ACTIVE 的集合不能再 PATCH —— 想改只能新建一版再绑定，
+   * 这样历史基线引用的规则集不会被静默改写。
+   */
+  createConstraintSet: (body: ConstraintSetUpsert) =>
+    request.post<ConstraintSet>('/api/design/constraints', body),
+
+  /** 绑定并激活：后端会先对 DRAFT 集合跑一遍自检，不通过直接 400 */
+  bindConstraints: (projectId: number, constraintSetId: number, activate = true) =>
+    request.post<ConstraintSet>(`${base(projectId)}/constraints`, { constraintSetId, activate })
 }
 
 /** 块状态 → 展示元数据 */

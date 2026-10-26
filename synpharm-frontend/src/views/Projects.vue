@@ -38,15 +38,25 @@
         </label>
         <label class="field">
           <span class="field__label">分子形式 *</span>
-          <select v-model.number="form.modalityId" class="field__control">
-            <option v-for="m in modalityOptions" :key="m.id" :value="m.id">{{ m.name }}</option>
-          </select>
+          <SpSelect
+            v-model.number="form.modalityId"
+            block
+            :options="modalityOptions"
+            value-key="id"
+            label-key="name"
+            placeholder="选择分子形式"
+          />
         </label>
         <label class="field">
           <span class="field__label">主靶点 *</span>
-          <select v-model.number="form.targetId" class="field__control">
-            <option v-for="t in targetOptions" :key="t.id" :value="t.id">{{ t.name }}</option>
-          </select>
+          <SpSelect
+            v-model.number="form.targetId"
+            block
+            :options="targetOptions"
+            value-key="id"
+            label-key="name"
+            placeholder="选择主靶点"
+          />
         </label>
         <label class="field">
           <span class="field__label">最少候选数 *</span>
@@ -54,10 +64,12 @@
         </label>
         <label class="field">
           <span class="field__label">作用机制</span>
-          <select v-model="form.moaCode" class="field__control">
-            <option value="">— 暂不指定 —</option>
-            <option v-for="o in moaOptions" :key="o.code" :value="o.code">{{ o.name }}</option>
-          </select>
+          <SpSelect
+            v-model="form.moaCode"
+            block
+            :options="moaSelectOptions"
+            placeholder="— 暂不指定 —"
+          />
         </label>
         <label class="field">
           <span class="field__label">GPU 配额（小时）</span>
@@ -170,6 +182,7 @@ import { useRoute, useRouter } from 'vue-router'
 import Sidebar from '@/components/Sidebar.vue'
 import PageHeader from '@/components/ui/PageHeader.vue'
 import EmptyState from '@/components/ui/EmptyState.vue'
+import SpSelect from '@/components/ui/SpSelect.vue'
 import { requirementApi } from '@/api/requirement'
 import { generationApi } from '@/api/generation'
 import { evaluationApi, editApi } from '@/api/evaluation'
@@ -205,6 +218,11 @@ const pendingTargetId = ref(0)
 const modalityOptions = ref<Array<{ id: number; code: string; name: string }>>([])
 const targetOptions = ref<Array<{ id: number; name: string }>>([])
 const moaOptions = ref<Array<{ code: string; name: string }>>([])
+/** MOA 下拉：首项是显式的「暂不指定」，与原来空 value 的语义一致 */
+const moaSelectOptions = computed(() => [
+  { value: '', label: '— 暂不指定 —' },
+  ...moaOptions.value.map((o) => ({ value: o.code, label: o.name }))
+])
 
 const form = ref({
   name: '',

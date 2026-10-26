@@ -25,14 +25,8 @@
             class="tg__search-input"
             placeholder="搜索名称、UniProt、基因名、中文名…"
           />
-          <select v-model="filterType" class="tg__select">
-            <option value="all">全部类型</option>
-            <option v-for="t in targetTypes" :key="t" :value="t">{{ t }}</option>
-          </select>
-          <select v-model="filterArea" class="tg__select">
-            <option value="all">全部领域</option>
-            <option v-for="a in diseaseAreas" :key="a" :value="a">{{ a }}</option>
-          </select>
+          <SpSelect v-model="filterType" :width="220" :options="targetTypeOptions" />
+          <SpSelect v-model="filterArea" :width="220" :options="diseaseAreaOptions" />
           <span class="tg__count">{{ filtered.length }} / {{ targets.length }} 个靶点</span>
         </section>
 
@@ -200,6 +194,7 @@ import { computed, onMounted, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import Sidebar from '@/components/Sidebar.vue'
 import PageHeader from '@/components/ui/PageHeader.vue'
+import SpSelect from '@/components/ui/SpSelect.vue'
 import {
   EXPERIMENT_METHOD_LABEL,
   POCKET_METHOD_LABEL,
@@ -221,6 +216,16 @@ const error = ref('')
 const searchQuery = ref('')
 const filterType = ref('all')
 const filterArea = ref('all')
+
+const targetTypeOptions = computed(() => [
+  { value: 'all', label: '全部类型' },
+  ...targetTypes.value.map((t) => ({ value: t, label: t }))
+])
+
+const diseaseAreaOptions = computed(() => [
+  { value: 'all', label: '全部领域' },
+  ...diseaseAreas.value.map((a) => ({ value: a, label: a }))
+])
 
 const selected = computed(() => targets.value.find((t) => t.id === selectedId.value) ?? null)
 

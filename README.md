@@ -21,6 +21,18 @@
 各子项目的详细说明在各自目录的 `README.md`；架构与三阶段设计文档在
 [`synpharm-deploy/docs`](./synpharm-deploy/docs)。
 
+前端 UI 约定：下拉选择一律用
+[`SpSelect.vue`](./synpharm-frontend/src/components/ui/SpSelect.vue)（自绘箭头与展开面板，
+键盘可达、teleport 到 body）；不要再写原生 `<select>` —— 它的箭头与选项列表由操作系统绘制，
+无法贴合主题。
+
+`SpSelect` 的宽度用 props 表达（`block` / `width` / `minWidth`），**不要用页面里 scoped
+的宽度类**：组件是多根节点（按钮 + Teleport），Vue 只给根节点打自己的 scopeId，
+父组件的 scopeId 不会落到那个 button 上，`父页面类[data-v-parent]` 永远匹配不到。
+
+按钮 / 横幅 / 标签等跨页控件同理，统一取
+[`styles/base.scss`](./synpharm-frontend/src/styles/base.scss) 里的全局类。
+
 ---
 
 ## 快速开始
@@ -98,6 +110,7 @@ docker compose -f docker-compose.dev.yml up -d
 .\e2e-decision.ps1             # 决策 D0~D8：证据/否决/分桶/名额/调整/风险接受/确认/回放
 .\e2e-decision-ui.ps1          # 决策页每个取数与写操作
 .\e2e-baseline.ps1             # 需求基线八块与冻结
+.\e2e-baseline-edit.ps1        # 基线的可编辑链路：靶点绑定/解绑、约束集新建与激活、风险预设
 .\e2e-generation.ps1           # 生成漏斗与逐分子去向
 .\e2e-edit.ps1                 # 缺口诊断 / 动作匹配 / 影响面 / 版本树
 ```
@@ -105,7 +118,7 @@ docker compose -f docker-compose.dev.yml up -d
 后端单元测试：
 
 ```bash
-cd synpharm-cloud && mvn -o -pl synpharm-core test      # 440 个用例
+cd synpharm-cloud && mvn -o -pl synpharm-core test      # 441 个用例
 ```
 
 ---
@@ -122,6 +135,9 @@ cd synpharm-cloud && mvn -o -pl synpharm-core test      # 440 个用例
 
 ## 已知边界
 
+- **需求基线是「可补齐」而非「可任意编辑」**：分子形式在建项目时确定，基线页只读；
+  结构来自绑定靶点自带的 PDB，页内不导入结构。靶点、约束、指标、风险点都可以在
+  补齐向导里直接改（约束的保存语义是**新建一版再激活**，不改写已激活的历史版本）。
 - 序列类分子（抗体 / 多肽）：计算层目前只提供小分子理化指标，画布与版本写回也仅适用于小分子。
 - 自动编辑动作（按缺口推荐「加取代基」并自动生成结构）依赖 `crem` 引擎，尚未部署；
   当前是人在画布上改、系统负责把结果合法地记进版本树。

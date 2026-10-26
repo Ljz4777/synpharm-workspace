@@ -133,11 +133,7 @@
           </div>
 
           <div class="pc__batch-body">
-            <select v-model="batchAlgoType" class="pc__select">
-              <option value="DTI">DTI 预测</option>
-              <option value="PPI">PPI 预测</option>
-              <option value="DDI">DDI 预测</option>
-            </select>
+            <SpSelect v-model="batchAlgoType" :min-width="160" :options="BATCH_ALGO_OPTIONS" />
 
             <label class="pc__dropzone" :class="{ 'pc__dropzone--has': batchFile }">
               <input type="file" accept=".csv" class="pc__file" @change="handleBatchFileChange" />
@@ -364,6 +360,7 @@ import { useRouter, useRoute } from 'vue-router'
 import { predictApi, batchApi, type BatchStatus, type PredictResultResponse } from '@/api/predict'
 import { favoriteApi } from '@/api/favorite'
 import Sidebar from '@/components/Sidebar.vue'
+import SpSelect from '@/components/ui/SpSelect.vue'
 import type { PredictionResult } from '@/types'
 
 const selectedType = ref<'ppi' | 'dti' | 'ddi'>('dti')
@@ -683,6 +680,12 @@ const handlePredict = async () => {
 // ================= 批量预测 =================
 const batchFile = ref<File | null>(null)
 const batchAlgoType = ref('DTI')
+
+const BATCH_ALGO_OPTIONS = [
+  { value: 'DTI', label: 'DTI 预测' },
+  { value: 'PPI', label: 'PPI 预测' },
+  { value: 'DDI', label: 'DDI 预测' }
+]
 const batchUploading = ref(false)
 const batchError = ref('')
 const batchStatus = ref<BatchStatus | null>(null)

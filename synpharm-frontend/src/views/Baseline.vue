@@ -50,6 +50,26 @@
       </div>
     </section>
 
+    <!-- 待补清单：把「还缺什么、点哪去补」直接摆出来，不让人自己找 -->
+    <section v-if="pendingGaps.length" class="todo">
+      <p class="todo__title">
+        还需要补 {{ pendingGaps.length }} 块才能冻结基线 ——
+        每项点右侧「去补」直达对应步骤
+      </p>
+      <ul class="todo__list">
+        <li v-for="gap in pendingGaps" :key="gap.code" class="todo__item">
+          <span class="todo__badge" :class="gap.severity === 'ERROR' ? 'todo__badge--err' : 'todo__badge--warn'">
+            {{ gap.severity === 'ERROR' ? '阻断' : '告警' }}
+          </span>
+          <span class="todo__block">{{ labelOf(BLOCK_LABEL, gap.block) }}</span>
+          <span class="todo__msg">{{ gap.message }}</span>
+          <button type="button" class="todo__go" @click="jumpToStep(JUMP_MAP[gap.block] ?? 'goal')">
+            去补 →
+          </button>
+        </li>
+      </ul>
+    </section>
+
     <nav class="tabs">
       <button
         v-for="tab in TABS"
@@ -81,6 +101,8 @@
       :risks="risks"
       :moa-options="moaOptions"
       :modality-label="modalityLabel"
+      :target-options="targetOptions"
+      :constraints="constraints"
       :busy="busy"
       @save-quota="saveQuota"
       @init-metrics="initMetrics"
@@ -89,6 +111,10 @@
       @add-risk="addRisk"
       @toggle-risk="toggleRisk"
       @delete-risk="deleteRisk"
+      @bind-target="bindTarget"
+      @unbind-target="unbindTarget"
+      @save-constraints="saveConstraints"
+      @freeze="freeze"
     />
 
     <section v-else class="history">
@@ -139,13 +165,17 @@ import type {
   BaselineBlockCode,
   BaselinePreview,
   BaselineSnapshot,
+  ConstraintRule,
+  ConstraintSet,
   LibraryItem,
   ProjectBrief,
   ProjectMetric,
   ProjectMetricUpsert,
   ProjectQuotaPatch,
   ProjectRisk,
-  ProjectRiskUpsert
+  ProjectRiskUpsert,
+  ProjectTargetBind,
+  TargetBrief
 } from '@/api/requirement'
 
 /**
@@ -165,8 +195,8 @@ function goGeneration() {
 }
 
 const TABS = [
-  { key: 'board', label: '八块看板' },
   { key: 'wizard', label: '补齐向导' },
+  { key: 'board', label: '八块看板' },
   { key: 'history', label: '版本历史' }
 ] as const
 
@@ -195,7 +225,7 @@ const freezing = ref(false)
 const busy = ref(false)
 const error = ref('')
 const notice = ref('')
-const activeTab = ref<'board' | 'wizard' | 'history'>('board')
+const activeTab = ref<'board' | 'wizard' | 'history'>('wizard')
 const wizardRef = ref<InstanceType<typeof BaselineWizard> | null>(null)
 
 const project = ref<ProjectBrief | null>(null)
@@ -205,6 +235,10 @@ const risks = ref<ProjectRisk[]>([])
 const history = ref<BaselineSnapshot[]>([])
 const moaOptions = ref<LibraryItem[]>([])
 const modalityOptions = ref<LibraryItem[]>([])
+/** 靶点库可选靶点（向导第 2 步绑定用） */
+const targetOptions = ref<TargetBrief[]>([])
+/** 当前生效约束集（向导第 3 步编辑用） */
+const constraints = ref<ConstraintSet | null>(null)
 
 const currentSnapshot = computed(() => history.value.find((s) => s.status === 'ACTIVE') ?? null)
 
@@ -251,6 +285,22 @@ const nextVersion = computed(() => {
   return active ? active.projectVersion + 1 : 1
 })
 
+/** 待补清单：阻断项排前面，同一块只列第一条（后面的是同因重复） */
+const pendingGaps = computed(() => {
+  const gaps = preview.value?.gaps ?? []
+  const seen = new Set<string>()
+  const ordered = [...gaps].sort((a, b) =>
+    a.severity === b.severity ? 0 : a.severity === 'ERROR' ? -1 : 1
+  )
+  const list: typeof gaps = []
+  for (const gap of ordered) {
+    if (seen.has(gap.block)) continue
+    seen.add(gap.block)
+    list.push(gap)
+  }
+  return list
+})
+
 const freezeTitle = computed(() => {
   if (!preview.value) return '请先预检'
   if (!preview.value.ready) return '八块不齐，无法冻结'
@@ -268,18 +318,22 @@ async function loadAll() {
   loading.value = true
   error.value = ''
   try {
-    const [projectData, previewData, metricList, riskList, historyList] = await Promise.all([
-      requirementApi.getProject(projectId),
-      requirementApi.preview(projectId),
-      requirementApi.listMetrics(projectId),
-      requirementApi.listRisks(projectId),
-      requirementApi.history(projectId)
-    ])
+    const [projectData, previewData, metricList, riskList, historyList, constraintSet] =
+      await Promise.all([
+        requirementApi.getProject(projectId),
+        requirementApi.preview(projectId),
+        requirementApi.listMetrics(projectId),
+        requirementApi.listRisks(projectId),
+        requirementApi.history(projectId),
+        // 约束集未绑定时后端返回 data=null，不是错误
+        requirementApi.getConstraints(projectId)
+      ])
     project.value = projectData
     preview.value = previewData
     metrics.value = metricList ?? []
     risks.value = riskList ?? []
     history.value = historyList ?? []
+    constraints.value = constraintSet ?? null
   } catch (e) {
     error.value = toMessage(e)
   } finally {
@@ -289,16 +343,19 @@ async function loadAll() {
 
 async function loadLibraries() {
   try {
-    const [moa, modality] = await Promise.all([
+    const [moa, modality, targets] = await Promise.all([
       requirementApi.listLibrary('MOA'),
-      requirementApi.listLibrary('MODALITY')
+      requirementApi.listLibrary('MODALITY'),
+      requirementApi.listTargets(1, 100)
     ])
     moaOptions.value = moa?.list ?? []
     modalityOptions.value = modality?.list ?? []
+    targetOptions.value = targets?.list ?? []
   } catch {
     // 字典拿不到不影响主流程：下拉会退化成只有「未指定」
     moaOptions.value = []
     modalityOptions.value = []
+    targetOptions.value = []
   }
 }
 
@@ -309,6 +366,8 @@ async function refreshAfterWrite(message: string) {
   preview.value = await requirementApi.preview(projectId)
   metrics.value = (await requirementApi.listMetrics(projectId)) ?? []
   risks.value = (await requirementApi.listRisks(projectId)) ?? []
+  constraints.value = (await requirementApi.getConstraints(projectId)) ?? null
+  project.value = await requirementApi.getProject(projectId)
 }
 
 /* ------------------------------ 写操作 ------------------------------ */
@@ -317,7 +376,6 @@ async function saveQuota(patch: ProjectQuotaPatch) {
   busy.value = true
   try {
     await requirementApi.patchProject(projectId, patch)
-    project.value = await requirementApi.getProject(projectId)
     await refreshAfterWrite('配额与作用机制已保存')
   } catch (e) {
     error.value = toMessage(e)
@@ -398,6 +456,59 @@ async function deleteRisk(riskId: number) {
   }
 }
 
+/* --------------------------- 靶点绑定（块1/2） --------------------------- */
+
+async function bindTarget(body: ProjectTargetBind) {
+  busy.value = true
+  try {
+    await requirementApi.bindTarget(projectId, body)
+    await refreshAfterWrite('靶点已绑定')
+  } catch (e) {
+    error.value = toMessage(e)
+  } finally {
+    busy.value = false
+  }
+}
+
+async function unbindTarget(targetId: number) {
+  busy.value = true
+  try {
+    await requirementApi.unbindTarget(projectId, targetId)
+    await refreshAfterWrite('靶点已解绑')
+  } catch (e) {
+    error.value = toMessage(e)
+  } finally {
+    busy.value = false
+  }
+}
+
+/* --------------------------- 约束集（块4/5） --------------------------- */
+
+/**
+ * 保存约束：**新建一版再激活**。
+ *
+ * 不原地 PATCH 有两个原因：已 ACTIVE 的集合后端不允许改（历史基线引用它）；
+ * 而且用户改完想撤回时，新建版本天然留下可回退的一版。
+ */
+async function saveConstraints(rules: ConstraintRule[]) {
+  busy.value = true
+  try {
+    const nextVersion = (constraints.value?.version ?? 0) + 1
+    const created = await requirementApi.createConstraintSet({
+      name: `约束集 v${nextVersion}`,
+      description: `由需求基面向导生成，共 ${rules.length} 条规则`,
+      rules,
+      version: nextVersion
+    })
+    await requirementApi.bindConstraints(projectId, created.id, true)
+    await refreshAfterWrite(`约束已保存并启用（${rules.length} 条规则）`)
+  } catch (e) {
+    error.value = toMessage(e)
+  } finally {
+    busy.value = false
+  }
+}
+
 async function freeze() {
   freezing.value = true
   error.value = ''
@@ -408,6 +519,9 @@ async function freeze() {
     history.value = (await requirementApi.history(projectId)) ?? []
     project.value = await requirementApi.getProject(projectId)
     notice.value = `已冻结 ${snapshot.snapshotNo}（v${snapshot.projectVersion}）`
+    // 冻结按钮可能在页面底部（向导最后一步）：把成功提示与「下一步」按钮带到视野里
+    const scroller = document.scrollingElement ?? document.documentElement
+    scroller?.scrollTo({ top: 0, behavior: 'smooth' })
   } catch (e) {
     error.value = toMessage(e)
     // 撞到并发修改：重新预检让用户看到最新缺口，而不是停在旧画面
@@ -594,6 +708,83 @@ watch(
     border-radius: 4px;
     background: $color-surface-sunken;
     font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  }
+}
+
+// 待补清单：一眼看到缺什么、去哪补
+.todo {
+  padding: 14px 16px;
+  border: 1px solid rgba(180, 83, 9, 0.28);
+  border-radius: 12px;
+  background: rgba(251, 191, 36, 0.08);
+
+  &__title {
+    margin: 0 0 10px;
+    font-size: $font-size-sm;
+    font-weight: 600;
+    color: #92400e;
+  }
+
+  &__list {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    margin: 0;
+    padding: 0;
+    list-style: none;
+  }
+
+  &__item {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    flex-wrap: wrap;
+    font-size: $font-size-sm;
+  }
+
+  &__badge {
+    flex: 0 0 auto;
+    padding: 1px 7px;
+    border-radius: 999px;
+    font-size: $font-size-xs;
+
+    &--err {
+      background: rgba(220, 38, 38, 0.12);
+      color: #b91c1c;
+    }
+
+    &--warn {
+      background: rgba(217, 119, 6, 0.14);
+      color: #b45309;
+    }
+  }
+
+  &__block {
+    flex: 0 0 auto;
+    min-width: 84px;
+    font-weight: 600;
+    color: $color-text;
+  }
+
+  &__msg {
+    flex: 1 1 220px;
+    color: $color-text-soft;
+  }
+
+  &__go {
+    flex: 0 0 auto;
+    border: 1px solid rgba(180, 83, 9, 0.4);
+    border-radius: 8px;
+    padding: 3px 10px;
+    background: var(--surface, #fff);
+    color: #92400e;
+    font-size: $font-size-xs;
+    font-family: inherit;
+    cursor: pointer;
+
+    &:hover {
+      background: rgba(251, 191, 36, 0.18);
+    }
   }
 }
 
