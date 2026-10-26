@@ -240,6 +240,8 @@ public class ProjectAppServiceImpl implements ProjectAppService {
         if (Boolean.TRUE.equals(request.getIsPrimary()) && findPrimaryBinding(projectId) != null) {
             throw new BizException(ErrorCode.DESIGN_PRIMARY_TARGET_EXISTS, null, Map.of("projectId", projectId));
         }
+        // 老数据里可能有历史上逻辑删除留下的行（占着 uk_project_target），插入前先清掉
+        projectTargetMapper.purgeBinding(projectId, request.getTargetId());
 
         ProjectTarget binding = insertBinding(projectId, request);
         refreshStatus(project);
@@ -260,7 +262,9 @@ public class ProjectAppServiceImpl implements ProjectAppService {
             throw new BizException(ErrorCode.TARGET_NOT_FOUND, "该项目未绑定该靶点",
                     Map.of("projectId", projectId, "targetId", targetId));
         }
-        projectTargetMapper.deleteById(binding.getId());
+        // 必须物理删除：逻辑删除会占着 uk_project_target / uk_primary_target，导致之后
+        // 重新绑定同一靶点、或解绑主靶点后再设主靶点时撞唯一键（500）
+        projectTargetMapper.hardDeleteById(binding.getId());
         // 主靶点被解绑后不自动提升其它靶点：谁是主靶点是用户决策，不是系统的猜测
         refreshStatus(project);
     }

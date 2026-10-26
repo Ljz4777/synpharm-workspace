@@ -366,11 +366,31 @@ class ProjectAppServiceImplTest {
 
         service.unbindTarget(1L, TARGET_OK);
 
-        verify(projectTargetMapper).deleteById(1L);
+        // 必须物理删除：逻辑删除会留下 deleted=1 的行，占住 uk_project_target /
+        // uk_primary_target，之后重绑同一靶点会撞唯一键
+        verify(projectTargetMapper).hardDeleteById(1L);
+        verify(projectTargetMapper, never()).deleteById(anyLong());
         ArgumentCaptor<DesignProject> captor = ArgumentCaptor.forClass(DesignProject.class);
         verify(projectMapper).updateById(captor.capture());
         // 主靶点被解绑后不自动提升其它靶点，而是如实回到 DRAFT
         assertThat(captor.getValue().getStatus()).isEqualTo(ProjectStatus.DRAFT.name());
+    }
+
+    @Test
+    @DisplayName("重绑同一靶点：先清历史残留再插入，不撞唯一键")
+    void bindTargetPurgesLeftoverBeforeInsert() {
+        when(projectMapper.selectById(1L)).thenReturn(project(1L, ME, ProjectStatus.DRAFT));
+        when(targetMapper.selectById(TARGET_OK)).thenReturn(target(TARGET_OK, "EGFR", "MST..."));
+        // 逻辑删除留下的残留行对查询不可见，却仍占着 uk_project_target
+        when(projectTargetMapper.selectCount(any(Wrapper.class))).thenReturn(0L);
+        when(projectTargetMapper.insert(any(ProjectTarget.class))).thenReturn(1);
+
+        ProjectTargetBindRequest request = new ProjectTargetBindRequest();
+        request.setTargetId(TARGET_OK);
+        request.setIsPrimary(false);
+        service.bindTarget(1L, request);
+
+        verify(projectTargetMapper).purgeBinding(1L, TARGET_OK);
     }
 
     @Test
