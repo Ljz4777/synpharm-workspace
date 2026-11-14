@@ -5,6 +5,8 @@
       比再堆一堆「智能预测」的宣传语有用：用户点下去之前就知道自己的输入会不会被拒。
     </div>
 
+    <EngineStatusBar show-probe-at show-refresh />
+
     <div class="bp__grid">
       <article v-for="item in BOUNDARIES" :key="item.code" class="bp__card">
         <header class="bp__card-head">
@@ -71,6 +73,7 @@
  */
 import { onMounted, ref } from 'vue'
 import { predictApi, type DdiDrug } from '@/api/predict'
+import EngineStatusBar from '@/components/evaluation/EngineStatusBar.vue'
 
 interface Boundary {
   code: 'DTI' | 'PPI' | 'DDI'

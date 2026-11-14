@@ -38,9 +38,16 @@ services:
       # （口令为空即跳过，不建弱口令账号），未来启用该服务时会以「账号不存在」失败。
       AUTH_DB_USER: ${AUTH_DB_USER:-synpharm_auth}
       AUTH_DB_PASSWORD: ${AUTH_DB_PASSWORD:-}
-      # 2026-10-22 服务收敛：原 design/asset/platform 三个账号合并为一个 core 账号
+      # 2026-10-22 design 域账号更名为 core（原 synpharm_design 已废弃）
       CORE_DB_USER: ${CORE_DB_USER:-synpharm_core}
       CORE_DB_PASSWORD: ${CORE_DB_PASSWORD:-}
+      # 2026-11-04 asset / platform 从 core 独立：各自独立 schema + 独立账号。
+      # 少了这两组变量，00_create_accounts.sh 会因口令为空**静默跳过**建号，
+      # 全新数据卷起来后 asset / platform 会以「账号不存在」连库失败。
+      ASSET_DB_USER: ${ASSET_DB_USER:-synpharm_asset}
+      ASSET_DB_PASSWORD: ${ASSET_DB_PASSWORD:-}
+      PLATFORM_DB_USER: ${PLATFORM_DB_USER:-synpharm_platform}
+      PLATFORM_DB_PASSWORD: ${PLATFORM_DB_PASSWORD:-}
       PREDICT_DB_USER: ${PREDICT_DB_USER:-synpharm_predict}
       PREDICT_DB_PASSWORD: ${PREDICT_DB_PASSWORD:-}
     ports:
@@ -342,6 +349,62 @@ services:
     restart: unless-stopped
 
   # ---------------------------------------------------------------------------
+  # 预测域（AI 预测：DTI / PPI / DDI + 批量任务）
+  # 网关有 /api/predict/**、/api/results/**、/api/favorites/**、/api/tasks/**、
+  # /api/batch/** 五条路由指向本服务：不部署它，评价记录等页面会统一报
+  # 「依赖的下游服务暂不可用」（HTTP 503）。
+  #   docker build -t synpharm/predict:1.0.0 --build-arg MODULE=synpharm-predict \
+  #     --build-arg SERVER_PORT=8082 .
+  # ---------------------------------------------------------------------------
+  predict:
+    image: synpharm/predict:${SYNPHARM_VERSION:-1.0.0}
+    container_name: synpharm-predict
+    environment:
+      SERVER_PORT: 8082
+      NACOS_SERVER_ADDR: nacos:8848
+      NACOS_DISCOVERY_ENABLED: "true"
+      DB_HOST: mysql
+      DB_PORT: 3306
+      PREDICT_DB_NAME: ${PREDICT_DB_NAME:-synpharm_predict}
+      PREDICT_DB_USER: ${PREDICT_DB_USER:-synpharm_predict}
+      PREDICT_DB_PASSWORD: ${PREDICT_DB_PASSWORD:?请在 .env 中设置 PREDICT_DB_PASSWORD}
+      INTERNAL_TOKEN: ${INTERNAL_TOKEN:?请在 .env 中设置 INTERNAL_TOKEN}
+      RABBITMQ_HOST: rabbitmq
+      RABBITMQ_PORT: 5672
+      RABBITMQ_USERNAME: ${RABBITMQ_USER:-synpharm}
+      RABBITMQ_PASSWORD: ${RABBITMQ_PASSWORD:?请在 .env 中设置 RABBITMQ_PASSWORD}
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      REDIS_PASSWORD: ${REDIS_PASSWORD:-}
+      FASTAPI_URL: ${FASTAPI_URL:-http://fastapi:8000}
+      FASTAPI_API_KEY: ${FASTAPI_API_KEY:-}
+      UNIPROT_BASE_URL: ${UNIPROT_BASE_URL:-https://rest.uniprot.org}
+      RCSB_BASE_URL: ${RCSB_BASE_URL:-https://data.rcsb.org}
+      # 批量上传的落盘目录：必须持久化，否则重启后历史批量结果文件 404
+      FILE_UPLOAD_DIR: /data/uploads
+      FILE_RESULT_DIR: /data/results
+    volumes:
+      - predict_data:/data
+    depends_on:
+      mysql:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+      nacos:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:8082/actuator/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 60s
+    networks:
+      - synpharm
+    restart: unless-stopped
+
+  # ---------------------------------------------------------------------------
   # FastAPI 算法引擎（AI 预测）
   # ---------------------------------------------------------------------------
   fastapi:
@@ -401,3 +464,4 @@ volumes:
   nacos_data:
   nacos_logs:
   fastapi_logs:
+  predict_data:

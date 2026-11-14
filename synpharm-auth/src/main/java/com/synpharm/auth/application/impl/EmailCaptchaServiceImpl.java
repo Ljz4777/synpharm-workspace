@@ -16,6 +16,7 @@ import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.security.SecureRandom;
 import java.util.HashMap;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.TimeUnit;
@@ -92,6 +93,9 @@ public class EmailCaptchaServiceImpl implements CaptchaService {
 
     @Override
     public SendCaptchaResult sendCaptcha(String target, String type) {
+        // 邮箱大小写不敏感：先归一化，否则「ABC@QQ.com」发出的码用「abc@qq.com」验不过
+        String email = normalizeEmail(target);
+
         // ========== 第〇步：类型白名单校验 ==========
         if (type == null || !ALLOWED_TYPES.contains(type)) {
             log.warn("不支持的验证码类型: {}", type);
@@ -99,34 +103,34 @@ public class EmailCaptchaServiceImpl implements CaptchaService {
         }
 
         // ========== 第一步：频率限制检查 ==========
-        checkSendLimit(target);
+        checkSendLimit(email);
 
         // ========== 第二步：生成6位随机验证码 ==========
         String code = generateCaptcha();
-        log.info("生成邮箱验证码, target: {}, type: {}", target, type);
+        log.info("生成邮箱验证码, target: {}, type: {}", email, type);
 
         // ========== 第三步：存入Redis ==========
-        String key = CAPTCHA_KEY + type + ":" + target;
+        String key = CAPTCHA_KEY + type + ":" + email;
         redisTemplate.opsForValue().set(key, code, CAPTCHA_EXPIRE_MINUTES, TimeUnit.MINUTES);
 
         // ========== 第四步：发送邮件 ==========
         // 显式开发模式（CAPTCHA_DEV_MODE=true）才回显验证码；生产不允许回显
         if (captchaDevMode) {
-            log.warn("[开发模式] CAPTCHA_DEV_MODE=true，验证码不回发邮件。target={}, code={}", target, code);
+            log.warn("[开发模式] CAPTCHA_DEV_MODE=true，验证码不回发邮件。target={}, code={}", email, code);
             return SendCaptchaResult.builder().devMode(true).code(code).build();
         }
 
         if (!StringUtils.hasText(senderEmail)) {
-            log.error("未配置发件邮箱 QQ_EMAIL，无法发送验证码。target={}", target);
+            log.error("未配置发件邮箱 QQ_EMAIL，无法发送验证码。target={}", email);
             throw new BizException(ErrorCode.EMAIL_SEND_FAILED, "邮件服务未配置，无法发送验证码");
         }
 
         Map<String, String> params = new HashMap<>();
         params.put("code", code);
         params.put("minutes", String.valueOf(CAPTCHA_EXPIRE_MINUTES));
-        emailNotifyService.send(target, "captcha", params);
+        emailNotifyService.send(email, "captcha", params);
 
-        log.info("邮箱验证码发送成功, target: {}, type: {}", target, type);
+        log.info("邮箱验证码发送成功, target: {}, type: {}", email, type);
         return SendCaptchaResult.builder().devMode(false).build();
     }
 
@@ -145,12 +149,13 @@ public class EmailCaptchaServiceImpl implements CaptchaService {
             return false;
         }
 
-        String key = CAPTCHA_KEY + type + ":" + target;
+        String email = normalizeEmail(target);
+        String key = CAPTCHA_KEY + type + ":" + email;
         String savedCode = redisTemplate.opsForValue().get(key);
 
         // 验证码不存在或已过期
         if (savedCode == null) {
-            log.warn("验证码不存在或已过期, target: {}", target);
+            log.warn("验证码不存在或已过期, target: {}", email);
             return false;
         }
 
@@ -158,13 +163,13 @@ public class EmailCaptchaServiceImpl implements CaptchaService {
         if (!MessageDigest.isEqual(
                 savedCode.getBytes(StandardCharsets.UTF_8),
                 code.getBytes(StandardCharsets.UTF_8))) {
-            log.warn("验证码不匹配, target: {}", target);
+            log.warn("验证码不匹配, target: {}", email);
             return false;
         }
 
         // 验证成功，删除验证码（一次性使用）
         redisTemplate.delete(key);
-        log.info("验证码验证通过, target: {}", target);
+        log.info("验证码验证通过, target: {}", email);
         return true;
     }
 
@@ -177,6 +182,16 @@ public class EmailCaptchaServiceImpl implements CaptchaService {
     }
 
     // ==================== 私有辅助方法 ====================
+
+    /**
+     * 邮箱归一化：去空白 + 转小写。
+     *
+     * <p>Redis key 里必须用归一化后的地址，否则大小写不同的同一邮箱会被当成两个 key，
+     * 表现为「发送成功但验证码验不过」（问题总账 B-16）。
+     */
+    private String normalizeEmail(String email) {
+        return email == null ? null : email.trim().toLowerCase(Locale.ROOT);
+    }
 
     /**
      * 生成6位数字验证码

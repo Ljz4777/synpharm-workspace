@@ -89,6 +89,11 @@
         </span>
       </label>
 
+      <p v-if="dictMissing.length" class="banner banner--warn"
+         title="开发排查：执行 synpharm-deploy/scripts/apply-seeds.sh 补种子后刷新">
+        当前无法创建项目：{{ dictMissing.join('、') }}为空。这通常表示系统初始化数据未导入，请联系管理员。
+      </p>
+
       <div class="create__actions">
         <button type="button" class="btn btn--primary" :disabled="creating || !form.name || !form.modalityId || !form.targetId"
                 @click="createProject">
@@ -218,6 +223,8 @@ const pendingTargetId = ref(0)
 const modalityOptions = ref<Array<{ id: number; code: string; name: string }>>([])
 const targetOptions = ref<Array<{ id: number; name: string }>>([])
 const moaOptions = ref<Array<{ code: string; name: string }>>([])
+/** 字典/靶点为空：不是用户操作问题，是系统初始化数据没导入 */
+const dictMissing = ref<string[]>([])
 /** MOA 下拉：首项是显式的「暂不指定」，与原来空 value 的语义一致 */
 const moaSelectOptions = computed(() => [
   { value: '', label: '— 暂不指定 —' },
@@ -256,18 +263,24 @@ function applyQueryPrefill() {
   if (showCreate.value) void prepareForm()
 }
 
-/** 下拉选项一次拉齐；失败不阻断页面，只是下拉空着 */
+/** 下拉选项一次拉齐；失败不阻断页面，但要记下「哪一项没拉到」 */
 async function prepareForm() {
   if (modalityOptions.value.length) return
+  const missing: string[] = []
   try {
     const [mod, moa, targets] = await Promise.all([
-      requirementApi.listLibrary('MODALITY').catch(() => null),
-      requirementApi.listLibrary('MOA').catch(() => null),
-      requirementApi.listTargets().catch(() => null)
+      requirementApi.listLibrary('MODALITY').catch(() => { missing.push('分子形式字典'); return null }),
+      requirementApi.listLibrary('MOA').catch(() => { missing.push('作用机制字典'); return null }),
+      requirementApi.listTargets().catch(() => { missing.push('靶点库'); return null })
     ])
     modalityOptions.value = (mod?.list ?? []).map((m) => ({ id: m.id, code: m.code, name: m.name }))
     moaOptions.value = (moa?.list ?? []).map((m) => ({ code: m.code, name: m.name }))
     targetOptions.value = (targets?.list ?? []).map((t) => ({ id: t.id, name: t.name }))
+
+    // 接口成功但返回空，同样是「数据未初始化」
+    if (!modalityOptions.value.length) missing.push('分子形式字典')
+    if (!targetOptions.value.length) missing.push('靶点库')
+    dictMissing.value = [...new Set(missing)]
 
     // 默认值：小分子 + EGFR（没有就第一个）；从靶点库带来的靶点优先
     const small = modalityOptions.value.find((m) => /SMALL/i.test(m.code)) ?? modalityOptions.value[0]

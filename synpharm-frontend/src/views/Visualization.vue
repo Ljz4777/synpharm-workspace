@@ -15,9 +15,45 @@
           </h1>
 
           <p class="visualization__subtitle">
-            交互式分子结构展示
+            交互式分子结构展示 · 可用 ←/→ 切换结果
           </p>
 
+        </div>
+
+        <!-- 结果选择器：这个页面要能换分子看，而不是只认 URL 里的一条 -->
+        <div class="visualization__picker">
+          <span class="visualization__picker-label">评价结果</span>
+          <select
+            class="visualization__select"
+            :value="selectedId"
+            :disabled="!resultOptions.length"
+            @change="onPickChange"
+          >
+            <option v-if="!resultOptions.length" value="">
+              {{ resultsLoading ? '加载中…' : '暂无评价结果' }}
+            </option>
+            <option v-for="opt in resultOptions" :key="opt.id" :value="opt.id">
+              {{ opt.label }}
+            </option>
+          </select>
+          <button
+            type="button"
+            class="visualization__step"
+            :disabled="!resultOptions.length"
+            title="上一条（←）"
+            @click="stepResult(-1)"
+          >
+            ‹
+          </button>
+          <button
+            type="button"
+            class="visualization__step"
+            :disabled="!resultOptions.length"
+            title="下一条（→）"
+            @click="stepResult(1)"
+          >
+            ›
+          </button>
         </div>
 
       </header>
@@ -439,9 +475,11 @@ import {
   computed,
   watch,
   nextTick,
+  onMounted,
+  onUnmounted,
 } from 'vue'
 
-import { useRoute } from 'vue-router'
+import { useRoute, useRouter } from 'vue-router'
 
 import {
   mockTargets,
@@ -474,6 +512,7 @@ import {
  * ========================================================= */
 
 const route = useRoute()
+const router = useRouter()
 
 /**
  * 显示控制接口与工作台口袋页签**共用一份实现**
@@ -559,6 +598,133 @@ watch(
     immediate: true,
   }
 )
+
+
+/* =========================================================
+ * 结果选择器：在同页切换任意一条历史评价结果
+ * ========================================================= */
+
+const recentResults =
+  ref<PredictionResult[]>([])
+
+const resultsLoading =
+  ref(false)
+
+/** 当前下拉选中的结果 id（与 URL 的 ?id= 保持同步） */
+const selectedId =
+  ref(String(route.query.id ?? ''))
+
+const resultOptions =
+  computed(() =>
+    recentResults.value.map((r) => ({
+      id: String(r.id),
+      label: `${r.targetName || r.targetId || '评价结果'} · ${formatResultTime(r.createdAt)}`,
+    }))
+  )
+
+function formatResultTime(iso?: string): string {
+
+  if (!iso) return '—'
+
+  const d = new Date(iso)
+
+  return isNaN(d.getTime())
+    ? iso
+    : d.toLocaleString('zh-CN', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' })
+}
+
+async function loadRecentResults(): Promise<void> {
+
+  resultsLoading.value = true
+
+  try {
+
+    const page = await resultApi.getResultList(1, 100)
+
+    recentResults.value = page.list ?? []
+
+  } catch {
+
+    // 预测服务不可用时保持空列表：页面仍有示例结构与明确说明，不额外报警
+    recentResults.value = []
+
+  } finally {
+
+    resultsLoading.value = false
+  }
+}
+
+function pickResult(id: string): void {
+
+  if (!id) return
+
+  selectedId.value = id
+
+  // 复用现有 watch(route.query.id) 重新取数，不改数据层
+  router.replace({ path: route.path, query: { ...route.query, id } })
+}
+
+function onPickChange(event: Event): void {
+
+  pickResult((event.target as HTMLSelectElement).value)
+}
+
+function stepResult(delta: number): void {
+
+  if (!recentResults.value.length) return
+
+  const ids = recentResults.value.map((r) => String(r.id))
+  const current = ids.indexOf(selectedId.value)
+  const next = current < 0 ? 0 : Math.min(Math.max(current + delta, 0), ids.length - 1)
+
+  if (next !== current) pickResult(ids[next])
+}
+
+function onVisualizationKeydown(event: KeyboardEvent): void {
+
+  const tag = (event.target as HTMLElement | null)?.tagName
+
+  // 输入框/下拉里按方向键是在移动光标，不能抢
+  if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return
+
+  if (event.key === 'ArrowLeft') {
+
+    event.preventDefault()
+    stepResult(-1)
+
+  } else if (event.key === 'ArrowRight') {
+
+    event.preventDefault()
+    stepResult(1)
+  }
+}
+
+watch(
+  () => route.query.id,
+
+  (id) => {
+    selectedId.value = String(id ?? '')
+  }
+)
+
+onMounted(async () => {
+
+  await loadRecentResults()
+
+  // 从侧栏裸进：默认打开最近一条结果，而不是停在示例 EGFR 上
+  const noContext =
+    !route.query.id && !route.query.targetId && !route.query.targetName
+
+  if (noContext && recentResults.value.length) {
+    pickResult(String(recentResults.value[0].id))
+  }
+
+  window.addEventListener('keydown', onVisualizationKeydown)
+})
+
+onUnmounted(() => {
+  window.removeEventListener('keydown', onVisualizationKeydown)
+})
 
 
 /* =========================================================
@@ -1013,7 +1179,66 @@ const getInteractionTypeName =
 }
 
 .visualization__header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: $spacing-md;
   margin-bottom: $spacing-lg;
+}
+
+.visualization__picker {
+  display: flex;
+  align-items: center;
+  gap: $spacing-sm;
+}
+
+.visualization__picker-label {
+  font-size: $font-size-sm;
+  color: $text-muted;
+  white-space: nowrap;
+}
+
+.visualization__select {
+  min-width: 240px;
+  max-width: 360px;
+  padding: 7px 10px;
+  border: 1px solid $border-color;
+  border-radius: $border-radius-md;
+  background: $bg-primary;
+  color: $text-primary;
+  font-size: $font-size-sm;
+  font-family: inherit;
+  cursor: pointer;
+
+  &:disabled {
+    opacity: 0.6;
+    cursor: not-allowed;
+  }
+}
+
+.visualization__step {
+  width: 30px;
+  height: 30px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid $border-color;
+  border-radius: $border-radius-md;
+  background: $bg-primary;
+  color: $text-secondary;
+  font-size: 16px;
+  line-height: 1;
+  cursor: pointer;
+
+  &:hover:not(:disabled) {
+    background: $bg-tertiary;
+  }
+
+  &:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+  }
 }
 
 .visualization__title {

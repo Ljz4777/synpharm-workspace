@@ -95,10 +95,17 @@
             </div>
           </div>
 
+          <div v-if="modelUnavailableReason" class="pc__unavailable">
+            ⚠️ {{ modelUnavailableReason }}
+          </div>
+          <div v-else-if="modelStatusHint" class="pc__status-hint">
+            {{ modelStatusHint }}
+          </div>
+
           <div class="pc__actions">
             <button class="pc__btn pc__btn--ghost" @click="handleDemoPredict">
               <svg class="pc__btn-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"></circle><path d="M15 9l-6 6"></path><path d="M9 9l6 6"></path></svg>
-              使用演示数据
+              用示例数据评价
             </button>
             <button class="pc__btn pc__btn--primary" :disabled="!isValidInput || isLoading" @click="handlePredict">
               <span v-if="isLoading" class="pc__spin"></span>
@@ -299,6 +306,7 @@ import { useRouter, useRoute } from 'vue-router'
 import { predictApi, batchApi, type BatchStatus } from '@/api/predict'
 import { candidatePredictionApi } from '@/api/candidate'
 import { favoriteApi } from '@/api/favorite'
+import { platformApi, type CapabilitiesResponse } from '@/api/platform'
 import SpSelect from '@/components/ui/SpSelect.vue'
 import type { PredictionResult } from '@/types'
 
@@ -320,6 +328,23 @@ const predictionResult = ref<PredictionResult | null>(null)
 const predictError = ref('')
 const savingResult = ref(false)
 const savedResult = ref(false)
+const capabilities = ref<CapabilitiesResponse | null>(null)
+const capabilitiesLoaded = ref(false)
+
+/** 明确不可用（models[key] === false）时才拦截提交；null 只提示、不阻断 */
+const modelUnavailableReason = computed(() => {
+  const ready = capabilities.value?.models?.[selectedType.value]
+  return ready === false
+    ? '该模型当前不可用，提交会被引擎拒绝。到「能力边界」可查看原因并刷新状态。'
+    : ''
+})
+
+/** 状态未知（未探测 / 接口失败）时的轻提示 */
+const modelStatusHint = computed(() => {
+  if (!capabilitiesLoaded.value) return ''
+  const ready = capabilities.value?.models?.[selectedType.value]
+  return ready == null ? '尚未获得该模型的就绪状态，仍可提交；如失败请到「能力边界」刷新探测。' : ''
+})
 
 /** 结果置信度是否低于“高级选项”里设定的阈值（纯前端判定，不改引擎计算） */
 const belowConfidenceThreshold = computed(() => {
@@ -417,7 +442,19 @@ const handleAttachToCandidate = async () => {
   }
 }
 
-onMounted(applyTargetFromQuery)
+async function refreshCapabilities(): Promise<void> {
+  try {
+    capabilities.value = await platformApi.fetchCapabilities()
+    capabilitiesLoaded.value = true
+  } catch {
+    capabilities.value = null
+  }
+}
+
+onMounted(() => {
+  applyTargetFromQuery()
+  refreshCapabilities()
+})
 
 const predictionTypes: Array<{ value: 'ppi' | 'dti' | 'ddi', label: string, icon: string, description: string }> = [
   { value: 'ppi', label: 'PPI预测', icon: '🔬', description: '蛋白质-蛋白质相互作用' },
@@ -642,7 +679,11 @@ const handleDemoPredict = async () => {
 
 const handlePredict = async () => {
   if (!isValidInput.value) return
-  
+  if (modelUnavailableReason.value) {
+    predictError.value = modelUnavailableReason.value
+    return
+  }
+
   isLoading.value = true
   predictError.value = ''
   predictionResult.value = null
@@ -2004,6 +2045,21 @@ const goToVisualization = () => {
   justify-content: flex-end;
   gap: $spacing-md;
   margin-top: $spacing-lg;
+}
+
+.pc__unavailable {
+  margin-bottom: $spacing-md;
+  padding: $spacing-sm $spacing-md;
+  border-radius: $border-radius-sm;
+  background: rgba(217, 119, 6, 0.12);
+  color: $warning-color;
+  font-size: $font-size-sm;
+}
+
+.pc__status-hint {
+  margin-bottom: $spacing-md;
+  font-size: $font-size-xs;
+  color: $text-muted;
 }
 
 .pc__btn {

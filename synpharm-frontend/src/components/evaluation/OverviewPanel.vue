@@ -2,8 +2,44 @@
   <div class="ov">
     <p v-if="loadError" class="ov__error">{{ loadError }}</p>
 
+    <!-- 零数据时先给「三步上手」卡片，而不是四个 0 -->
+    <section v-if="showOnboarding" class="ov__onboarding">
+      <div class="ov__onboarding-head">🚀 三步开始评价</div>
+      <div class="ov__steps">
+        <div class="ov__step">
+          <span class="ov__step-num">1</span>
+          <div class="ov__step-body">
+            <div class="ov__step-title">选类型</div>
+            <div class="ov__step-desc">DTI、PPI、DDI 三选一，先看「能力边界」确认引擎在线。</div>
+          </div>
+        </div>
+        <div class="ov__step">
+          <span class="ov__step-num">2</span>
+          <div class="ov__step-body">
+            <div class="ov__step-title">填输入</div>
+            <div class="ov__step-desc">DTI 传 SMILES + 靶点，PPI 传两条序列，DDI 传两个 SMILES。</div>
+          </div>
+        </div>
+        <div class="ov__step">
+          <span class="ov__step-num">3</span>
+          <div class="ov__step-body">
+            <div class="ov__step-title">看结果</div>
+            <div class="ov__step-desc">提交后到「单次/批量」或「评价记录」里查看，可跳转 3D 可视化。</div>
+          </div>
+        </div>
+      </div>
+      <div class="ov__onboarding-actions">
+        <router-link :to="{ path: '/evaluation', query: { tab: 'single' } }" class="ov__btn ov__btn--primary">
+          发起单次评价
+        </router-link>
+        <router-link :to="{ path: '/evaluation', query: { tab: 'boundary' } }" class="ov__btn">
+          查看能力边界
+        </router-link>
+      </div>
+    </section>
+
     <!-- 四个统计口径：任务量、完成度、在跑、平均置信度 -->
-    <section class="ov__stats">
+    <section v-else class="ov__stats">
       <template v-if="loading">
         <span v-for="n in 4" :key="n" class="u-skeleton ov__skeleton" />
       </template>
@@ -143,6 +179,9 @@ const recentResults = computed(() =>
     .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())
     .slice(0, 5)
 )
+
+/** 没有任何任务/结果时展示「三步上手」 */
+const showOnboarding = computed(() => !loading.value && !loadError.value && tasks.value.length === 0 && results.value.length === 0)
 
 async function load(): Promise<void> {
   loading.value = true
@@ -298,6 +337,86 @@ $ov-err-bg: rgba(220, 38, 38, 0.1);
 
   &:hover {
     text-decoration: underline;
+  }
+}
+
+.ov__onboarding {
+  padding: $spacing-lg;
+  border: 1px solid $color-border;
+  border-radius: $radius-card;
+  background: $color-surface;
+}
+
+.ov__onboarding-head {
+  margin-bottom: $spacing-md;
+  font-size: $font-size-lg;
+  font-weight: $font-weight-semibold;
+  color: $color-text;
+}
+
+.ov__steps {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: $spacing-md;
+}
+
+.ov__step {
+  display: flex;
+  gap: $spacing-sm;
+}
+
+.ov__step-num {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  background: $color-brand;
+  color: $color-on-dark;
+  font-size: $font-size-xs;
+  font-weight: $font-weight-semibold;
+  flex-shrink: 0;
+}
+
+.ov__step-body {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.ov__step-title {
+  font-size: $font-size-sm;
+  font-weight: $font-weight-semibold;
+  color: $color-text;
+}
+
+.ov__step-desc {
+  font-size: $font-size-xs;
+  line-height: 1.6;
+  color: $color-text-soft;
+}
+
+.ov__onboarding-actions {
+  display: flex;
+  gap: $spacing-md;
+  margin-top: $spacing-lg;
+}
+
+.ov__btn {
+  padding: 8px 16px;
+  border: 1px solid $color-border;
+  border-radius: $radius-control;
+  background: $color-surface;
+  font-size: $font-size-sm;
+  color: $color-text;
+  text-decoration: none;
+  cursor: pointer;
+
+  &--primary {
+    border-color: $color-brand;
+    background: $color-brand;
+    color: $color-on-dark;
   }
 }
 </style>

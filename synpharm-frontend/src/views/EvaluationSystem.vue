@@ -9,6 +9,8 @@
           subtitle="指标口径 → 发起评价 → 能力边界：先知道「评什么、用什么评」，再决定要不要跑"
         />
 
+        <EngineStatusBar show-probe-at />
+
         <TabBar v-model="currentTab" :tabs="TABS" />
 
         <OverviewPanel v-if="activeTab === 'overview'" />
@@ -47,6 +49,7 @@ import OverviewPanel from '@/components/evaluation/OverviewPanel.vue'
 import PredictPanel from '@/components/evaluation/PredictPanel.vue'
 import MetricsPanel from '@/components/evaluation/MetricsPanel.vue'
 import BoundaryPanel from '@/components/evaluation/BoundaryPanel.vue'
+import EngineStatusBar from '@/components/evaluation/EngineStatusBar.vue'
 
 const TABS = [
   { key: 'overview', label: '概览', icon: '📊' },

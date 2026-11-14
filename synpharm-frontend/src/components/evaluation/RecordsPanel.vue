@@ -8,7 +8,11 @@
     </div>
 
     <div v-if="loading" class="rp__state">加载中…</div>
-    <div v-else-if="loadError" class="rp__state rp__state--error">{{ loadError }}</div>
+    <div v-else-if="loadError" class="rp__state rp__state--error">
+      <p>{{ loadError }}</p>
+      <p v-if="loadHint" class="rp__hint">{{ loadHint }}</p>
+      <button type="button" class="rp__retry" @click="loadResults">重试</button>
+    </div>
     <template v-else>
       <div v-if="filteredResults.length" class="rp__grid">
         <ResultCard
@@ -42,6 +46,7 @@ import { computed, onMounted, reactive, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { resultApi } from '@/api/predict'
+import type { ApiError } from '@/utils/request'
 import type { PredictionResult } from '@/types'
 import ResultCard from '@/components/ResultCard.vue'
 import EmptyState from '@/components/ui/EmptyState.vue'
@@ -71,15 +76,25 @@ const SORT_OPTIONS = [
 const results = ref<PredictionResult[]>([])
 const loading = ref(false)
 const loadError = ref('')
+const loadHint = ref('')
 
 async function loadResults(): Promise<void> {
   loading.value = true
   loadError.value = ''
+  loadHint.value = ''
   try {
     const page = await resultApi.getResultList(1, 100)
     results.value = page.list
   } catch (error: unknown) {
-    loadError.value = error instanceof Error ? error.message : '加载评价结果失败'
+    const apiError = error as ApiError
+    // 网关统一兜底文案「依赖的下游服务暂不可用」= predict 未部署 / 未注册，
+    // 不是用户网络问题；说清楚找谁，并给一个重试入口。
+    if (apiError?.status === 503 || apiError?.errorCode === 'DEPENDENCY_UNAVAILABLE') {
+      loadError.value = '预测服务暂时不可用，无法读取评价结果。'
+      loadHint.value = '通常表示 synpharm-predict 未启动或未注册到网关，请联系管理员检查后重试。'
+    } else {
+      loadError.value = error instanceof Error ? error.message : '加载评价结果失败'
+    }
   } finally {
     loading.value = false
   }
@@ -207,5 +222,22 @@ async function handleResultDelete(result: PredictionResult): Promise<void> {
 
 .rp__state--error {
   color: $error-color;
+}
+
+.rp__hint {
+  margin-top: $spacing-xs;
+  color: $color-text-faint;
+}
+
+.rp__retry {
+  margin-top: $spacing-md;
+  padding: 7px 18px;
+  border: 1px solid currentColor;
+  border-radius: $radius-control;
+  background: transparent;
+  color: inherit;
+  font-size: $font-size-sm;
+  font-family: inherit;
+  cursor: pointer;
 }
 </style>

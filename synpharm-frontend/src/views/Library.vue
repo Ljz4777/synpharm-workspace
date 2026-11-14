@@ -43,7 +43,8 @@
                   </span>
                 </span>
                 <span v-if="ds.isOwner" class="lb__ds-badge">我的</span>
-                <span v-else-if="!ds.itemCount" class="lb__ds-badge lb__ds-badge--soon">待开放</span>
+                <span v-else-if="!ds.itemCount" class="lb__ds-badge lb__ds-badge--soon"
+                      title="公共库为空通常是初始化种子数据未导入，管理员可执行 synpharm-deploy/scripts/apply-seeds.sh">暂无数据</span>
               </button>
 
               <p v-if="group.key !== 'shared' && !group.items.length" class="lb__group-empty">
@@ -379,6 +380,9 @@ const emptyTitle = computed(() => (hasFilters.value ? '没有匹配的条目' : 
 const emptyDescription = computed(() => {
   if (hasFilters.value) return '换个关键词，或减少标签条件（多标签默认要求同时命中）。'
   const type = activeDataset.value?.itemType
+  if (activeDataset.value?.visibility === 'PUBLIC') {
+    return '该数据集暂无条目。若为平台公共库，通常是初始化种子数据未导入，请联系管理员。'
+  }
   if (type === 'MOLECULE' || type === 'SEQUENCE') {
     return '分子与抗体条目的写入接口在下一阶段开放，届时可在此检索结构、分子量与序列。'
   }

@@ -90,6 +90,20 @@ docker compose --env-file .env -f synpharm-deploy/docker-compose.yml up -d
 
 生成强随机密钥：`openssl rand -hex 32`
 
+## 已有数据卷补齐基线数据
+
+MySQL 官方镜像**只在数据卷为空时**执行 `sql/` 下的脚本。已部署环境（数据卷非空）升级后，
+新加的种子脚本（`37` / `48` / `49`）不会自动执行，表现为「公共库为空、新建项目选不到
+分子形式与靶点」。执行一次即可补齐：
+
+```bash
+MYSQL_ROOT_PASSWORD=*** bash synpharm-deploy/scripts/apply-seeds.sh
+```
+
+脚本按 `37 → 48 → 49` 顺序幂等执行，执行后回读校验并登记到 `synpharm_core.schema_seed_log`；
+已执行且脚本内容未变化时输出 `SKIP`。`--dry-run` 只打印计划，`--force` 忽略登记表重跑。
+必须用 root 账号（37 需要跨库写 `synpharm_platform.design_tool`，48 需要建表与重建唯一键）。
+
 ## 项目文档
 
 [docs/](docs/) 目录（随本仓库分发）：
